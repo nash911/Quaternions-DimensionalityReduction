@@ -1,5 +1,8 @@
 import numpy as np
+from Quaternion import Quat, normalize
 import tensorflow as tf
+import math
+from collections import OrderedDict
 import sys, getopt
 import json
 from mpl_toolkits.mplot3d import Axes3D
@@ -50,6 +53,12 @@ class TF_PCA:
         else:
             keep_info = ladder[n_dims - 1]
 
+        # print("Ladder: ", ladder)
+        # print("self.singular_values: ", self.singular_values)
+        # print("sum(self.singular_values): ", sum(self.singular_values))
+        # print("No. of dimensions: ", n_dims)
+        # print("Keept info: ", keep_info)
+
         return n_dims, keep_info
 
 
@@ -90,6 +99,7 @@ class TF_PCA:
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
         return keep_info, n_dims, self.v[:, 0:n_dims]
 
+
 def plot(data):
     # 3-D plot
     fig = plt.figure()
@@ -103,30 +113,143 @@ def plot(data):
 
     plt.show()
 
+
+def concatenate_trajectories(trajs_dict, key_list = [], include=False):
+    trajs_data = []
+    for k, v in trajs_dict.items():
+        if include:
+            if k in key_list:
+                trajs_data.append(v)
+        if not include:
+            if not k in key_list:
+                trajs_data.append(v)
+
+    return np.column_stack(trajs_data)
+
+
 def decompose_trajectories(motion_data):
     # Decomposes trajectories into indificual DOFs by joint name
-    quat_trajs = dict()
+    quat_trajs = OrderedDict()
 
-    quat_trajs['frame_duration'] = motion_data[:,0:1]
-    quat_trajs['root_position'] = motion_data[:,1:4]
-    quat_trajs['root_rotation'] = motion_data[:,4:8]
+    quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
+    quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
+    quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
 
-    quat_trajs['chest_rotation'] = motion_data[:,8:12]
-    quat_trajs['neck_rotation'] = motion_data[:,12:16]
+    quat_trajs['chest_rotation'] = np.array(motion_data[:,8:12]) # Quaternion
+    quat_trajs['neck_rotation'] = np.array(motion_data[:,12:16]) # Quaternion
 
-    quat_trajs['right_hip_rotation'] = motion_data[:,16:20]
-    quat_trajs['right_knee_rotation'] = motion_data[:,20:21]
-    quat_trajs['right_ankle_rotation'] = motion_data[:,21:25]
-    quat_trajs['right_shoulder_rotation'] = motion_data[:,25:29]
-    quat_trajs['right_elbow_rotation'] = motion_data[:,29:30]
+    quat_trajs['right_hip_rotation'] = np.array(motion_data[:,16:20]) # Quaternion
+    quat_trajs['right_knee_rotation'] = np.array(motion_data[:,20:21]) # 1D Joint
+    quat_trajs['right_ankle_rotation'] = np.array(motion_data[:,21:25]) # Quaternion
+    quat_trajs['right_shoulder_rotation'] = np.array(motion_data[:,25:29]) # Quaternion
+    quat_trajs['right_elbow_rotation'] = np.array(motion_data[:,29:30]) # 1D Joint
 
-    quat_trajs['left_hip_rotation'] = motion_data[:,30:34]
-    quat_trajs['left_knee_rotation'] = motion_data[:,34:35]
-    quat_trajs['left_ankle_rotation'] = motion_data[:,35:39]
-    quat_trajs['left_shoulder_rotation'] = motion_data[:,39:43]
-    quat_trajs['left_elbow_rotation'] = motion_data[:,43:44]
+    quat_trajs['left_hip_rotation'] = np.array(motion_data[:,30:34]) # Quaternion
+    quat_trajs['left_knee_rotation'] = np.array(motion_data[:,34:35]) # 1D Joint
+    quat_trajs['left_ankle_rotation'] = np.array(motion_data[:,35:39]) # Quaternion
+    quat_trajs['left_shoulder_rotation'] = np.array(motion_data[:,39:43]) # Quaternion
+    quat_trajs['left_elbow_rotation'] = np.array(motion_data[:,43:44]) # 1D Joint
 
     return quat_trajs
+
+
+def normalize_quaternions(quat_dict):
+    norm_quat_dict = OrderedDict()
+
+    for k, v in quat_dict.items():
+        if v.shape[1] == 4:
+            norm_quats = []
+            for r in v:
+                nq = Quat(normalize(r))
+                #nq = Quat(r)
+                norm_quats.append(nq._get_q())
+            norm_quat_dict[k] = np.array(norm_quats)
+        else:
+            norm_quat_dict[k] = v
+
+    return norm_quat_dict
+
+
+def convert_to_axis_angle(quaternion_dict):
+    axis_angle_dict = OrderedDict()
+
+    for k, v in quaternion_dict.items():
+        if v.shape[1] == 4:
+            axis_angle = []
+            for r in v:
+                q = Quat(r)
+                a = q._get_angle_axis()
+                axis_angle.append(np.array([a[0], a[1][0], a[1][1], a[1][2]])) # [Ө, x, y, z]
+            axis_angle_dict[k] = np.array(axis_angle)
+        else:
+            axis_angle_dict[k] = v
+
+    return axis_angle_dict
+
+
+def convert_to_quaternion(axis_angle_dict, k_list):
+    quat_dict = OrderedDict()
+
+    for k, v in axis_angle_dict.items():
+        if v.shape[1] == 4 and k not in k_list:
+            quaternions = []
+            for r in v:
+                x = r[1] * math.sin(r[0]/2.0)
+                y = r[2] * math.sin(r[0]/2.0)
+                z = r[3] * math.sin(r[0]/2.0)
+                w = math.cos(r[0]/2.0)
+
+                q = np.array([x, y, z, w])
+                #quaternions.append(normalize(q))
+                quaternions.append(q)
+            quat_dict[k] = np.array(quaternions)
+        else:
+            quat_dict[k] = v
+
+    return quat_dict
+
+
+def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
+                keep_info=0.9, pca=True, reproj=True, basis=True,
+                axisangle=False):
+    if pca:
+        # Project the trajectories on to a reduced lower-dimensional space
+        info_retained, num_dims_retained, reduced = \
+            tf_pca.reduce(keep_info=keep_info, n_dims=n_dims)
+        pca_traj_dict['Reduced'] = reduced.tolist()
+        #plot(reduced)
+
+    if reproj:
+        # Reproject the trajectories on to a linear sub-space
+        info_retained, num_dims_retained, reproj_traj = \
+            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims)
+
+        # Replace original trajectories, in the controlable DOFs, with
+        # reprojected trajectories
+        unchanged_traj = concatenate_trajectories(trajectory_dict, key_list,
+                                                  include=True)
+        pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
+                                              reproj_traj)).tolist()
+
+        if axisangle:
+            # Convert back to Quaternions
+            mixed_dict = decompose_trajectories(np.array(pca_traj_dict['Frames']))
+            quat_dict = convert_to_quaternion(mixed_dict, key_list)
+            concat_quat_trajs = concatenate_trajectories(quat_dict)
+            pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
+
+    if basis:
+        # Get full-rank basis vectors of the linear sub-space
+        info_retained, num_dims_retained, basis_v = \
+            tf_pca.basis(keep_info=keep_info, n_dims=n_dims)
+        pca_traj_dict['Basis'] = basis_v.tolist()
+
+    if pca and reproj and basis:
+        # Check if U (∑ V^T) = (U ∑) V^T
+        re_proj = np.matmul(reduced, np.transpose(basis_v))
+        np.testing.assert_array_almost_equal(reproj_traj, re_proj, decimal=6)
+
+    return info_retained, num_dims_retained, pca_traj_dict
 
 
 def main(argv):
@@ -135,6 +258,7 @@ def main(argv):
     pca = False
     reproj = False
     basis = False
+    axisangle = False
 
     keep_info = None
     n_dims = None
@@ -143,15 +267,15 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbi:k:d:",
-            ["pca", "reproj", "basis", "ifile=","keep=", "dims="])
+        opts, args = getopt.getopt(argv,"hprbai:k:d:",
+            ["pca", "reproj", "basis", "axisangle" "ifile=","keep=", "dims="])
     except getopt.GetoptError:
-        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b")
+        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a")
         sys.exit(2)
 
     for opt, arg in opts:
        if opt == '-h':
-           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b")
+           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
@@ -159,6 +283,8 @@ def main(argv):
            reproj = True
        elif opt in ("-b", "--basis"):
            basis = True
+       elif opt in ("-a", "--axisangle"):
+           axisangle = True
        elif opt in ("-i", "--ifile"):
            input_file = arg
        elif opt in ("-k", "--keep"):
@@ -178,50 +304,36 @@ def main(argv):
     motion_data = np.array(data['Frames'])
 
     quat_trajectory_dict = decompose_trajectories(motion_data)
+    norm_quat_trajectory_dict = normalize_quaternions(quat_trajectory_dict)
+    axis_angle_traj_dict = convert_to_axis_angle(norm_quat_trajectory_dict)
 
-    starting_joint = 8
-    original_traj = motion_data[:, starting_joint:44]
+    key_list = ['frame_duration', 'root_position', 'root_rotation']
+    quat_traj_matrix = concatenate_trajectories(norm_quat_trajectory_dict,
+                                                key_list, include=False)
+    axisangle_traj_matrix = concatenate_trajectories(axis_angle_traj_dict,
+                                                     key_list, include=False)
 
     # Create a TF PCA object
-    tf_pca = TF_PCA(original_traj)
+    if axisangle:
+        tf_pca = TF_PCA(axisangle_traj_matrix)
+    else:
+        tf_pca = TF_PCA(quat_traj_matrix)
 
     # Compute U, ∑ and V
     tf_pca.fit()
 
     # Create a clone of the input file dictionary
-    pca_traj = data.copy()
+    pca_traj_dict = data.copy()
 
-    if pca:
-        # Project the trajectories on to a reduced lower-dimensional space
-        info_retained, num_dims_retained, reduced = \
-            tf_pca.reduce(keep_info=keep_info, n_dims=n_dims)
-        pca_traj['Reduced'] = reduced.tolist()
-        #plot(reduced)
+    info_retained, num_dims_retained, pca_traj_dict = \
+        pca_extract(tf_pca, pca_traj_dict, norm_quat_trajectory_dict,
+                    key_list, n_dims=n_dims, keep_info=keep_info, pca=pca,
+                    reproj=reproj, basis=basis, axisangle=axisangle)
 
-    if reproj:
-        # Reproject the trajectories on to a linear sub-space
-        info_retained, num_dims_retained, reproj_traj = \
-            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims)
-
-        # Replace original trajectories, in the controlable DOFs, with
-        # reprojected trajectories
-        pca_traj['Frames'] = np.column_stack((motion_data[:, 0:starting_joint],
-                                                 reproj_traj)).tolist()
-
-    if basis:
-        # Get full-rank basis vectors of the linear sub-space
-        info_retained, num_dims_retained, basis_v = \
-            tf_pca.basis(keep_info=keep_info, n_dims=n_dims)
-        pca_traj['Basis'] = basis_v.tolist()
-
+    info_retained = float(round(info_retained, 6))
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
-
-    if pca and reproj and basis:
-        # Check if U (∑ V^T) = (U ∑) V^T
-        re_proj = np.matmul(reduced, np.transpose(basis_v))
-        np.testing.assert_array_almost_equal(reproj_traj, re_proj, decimal=6)
 
     # Create output path and file
     output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
@@ -232,10 +344,10 @@ def main(argv):
 
     # Save pca trajectories and basis dictionary on to the created output file
     with open(output_file, 'w') as fp:
-        json.dump(pca_traj, fp, indent=4)
+        json.dump(pca_traj_dict, fp, indent=4)
 
     with open('pca_traj.txt', 'w') as fp:
-        json.dump(pca_traj, fp, indent=4)
+        json.dump(pca_traj_dict, fp, indent=4)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
