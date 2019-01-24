@@ -53,12 +53,6 @@ class TF_PCA:
         else:
             keep_info = ladder[n_dims - 1]
 
-        # print("Ladder: ", ladder)
-        # print("self.singular_values: ", self.singular_values)
-        # print("sum(self.singular_values): ", sum(self.singular_values))
-        # print("No. of dimensions: ", n_dims)
-        # print("Keept info: ", keep_info)
-
         return n_dims, keep_info
 
 
@@ -160,9 +154,10 @@ def normalize_quaternions(quat_dict):
         if v.shape[1] == 4:
             norm_quats = []
             for r in v:
-                nq = Quat(normalize(r))
-                #nq = Quat(r)
-                norm_quats.append(nq._get_q())
+                q = np.array([r[1], r[2], r[3], r[0]]) # [x, y, z, w]
+                nq = Quat(normalize(q))
+                nq_v = nq._get_q()
+                norm_quats.append([nq_v[3], nq_v[0], nq_v[1], nq_v[2]]) # [w, x, y, z]
             norm_quat_dict[k] = np.array(norm_quats)
         else:
             norm_quat_dict[k] = v
@@ -177,8 +172,9 @@ def convert_to_axis_angle(quaternion_dict):
         if v.shape[1] == 4:
             axis_angle = []
             for r in v:
-                q = Quat(r)
-                a = q._get_angle_axis()
+                q = np.array([r[1], r[2], r[3], r[0]]) # [x, y, z, w]
+                quat = Quat(q)
+                a = quat._get_angle_axis()
                 axis_angle.append(np.array([a[0], a[1][0], a[1][1], a[1][2]])) # [Ө, x, y, z]
             axis_angle_dict[k] = np.array(axis_angle)
         else:
@@ -199,8 +195,7 @@ def convert_to_quaternion(axis_angle_dict, k_list):
                 z = r[3] * math.sin(r[0]/2.0)
                 w = math.cos(r[0]/2.0)
 
-                q = np.array([x, y, z, w])
-                #quaternions.append(normalize(q))
+                q = np.array([w, x, y, z])
                 quaternions.append(q)
             quat_dict[k] = np.array(quaternions)
         else:
