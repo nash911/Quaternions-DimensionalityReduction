@@ -5,6 +5,7 @@ import math
 from collections import OrderedDict
 import sys, getopt
 import json
+import os
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -91,7 +92,25 @@ class TF_PCA:
 
     def basis(self, n_dims=None, keep_info=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
-        return keep_info, n_dims, self.v[:, 0:n_dims]
+        return keep_info, n_dims, np.matmul(self.sigma[0:n_dims, 0:n_dims],
+                                            self.v[:, 0:n_dims].T)
+
+    def pc_mean_std(self, n_dims=None, keep_info=None):
+        n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
+
+        with self.graph.as_default():
+            # Cut out the relevant part from U
+            u = tf.slice(self.u, [0, 0], [self.data.shape[0], n_dims])
+            # μ
+            mu = tf.reduce_mean(u, axis=0, keep_dims=True)
+            # (x - μ)^2
+            devs_squared = tf.square(u - mu)
+            # √∑(x - μ)^2
+            std = tf.sqrt(tf.reduce_mean(devs_squared, axis=0, keep_dims=False))
+            mean = tf.squeeze(mu)
+
+        with tf.Session(graph=self.graph) as session:
+            return session.run([mean, std], feed_dict={self.X: self.data})
 
 
 def plot(data):
@@ -204,18 +223,39 @@ def convert_to_quaternion(axis_angle_dict, k_list):
     return quat_dict
 
 
+def check_orthogonality(c_vecs, n_dims):
+    num_vecs = c_vecs.shape[0]
+    vec_list = [c_vecs[i, :] for i in range(num_vecs)]
+
+    orthogonal = True
+
+    mat_mul = np.matmul(c_vecs, c_vecs.T)
+    if np.allclose(mat_mul, np.eye(n_dims), rtol=1e-05, atol=1e-05):
+        print("WARNING: Basis vectors are Normal!")
+
+    for i in range(num_vecs):
+        for j in range(i+1, num_vecs):
+            dot_prod = np.matmul(vec_list[i], vec_list[j].T)
+            if dot_prod > 1e-6:
+                print(dot_prod)
+                orthogonal = False
+                break
+
+    return orthogonal
+
+
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True,
                 axisangle=False):
     if pca:
-        # Project the trajectories on to a reduced lower-dimensional space
+        # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
             tf_pca.reduce(keep_info=keep_info, n_dims=n_dims)
         pca_traj_dict['Reduced'] = reduced.tolist()
         #plot(reduced)
 
     if reproj:
-        # Reproject the trajectories on to a linear sub-space
+        # Reproject the trajectories on to a linear sub-space in the full space: U ∑ V^T
         info_retained, num_dims_retained, reproj_traj = \
             tf_pca.reproject(keep_info=keep_info, n_dims=n_dims)
 
@@ -237,12 +277,14 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         # Get full-rank basis vectors of the linear sub-space
         info_retained, num_dims_retained, basis_v = \
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims)
-        pca_traj_dict['Basis'] = basis_v.tolist()
 
-    if pca and reproj and basis:
-        # Check if U (∑ V^T) = (U ∑) V^T
-        re_proj = np.matmul(reduced, np.transpose(basis_v))
-        np.testing.assert_array_almost_equal(reproj_traj, re_proj, decimal=6)
+        if not check_orthogonality(basis_v, n_dims):
+            if os.path.exists('pca_traj.txt'):
+                os.remove('pca_traj.txt')
+            print("Error: Basis Vectors not Orthogonal!")
+            sys.exit()
+
+        pca_traj_dict['Basis'] = basis_v.tolist()
 
     return info_retained, num_dims_retained, pca_traj_dict
 
@@ -254,6 +296,7 @@ def main(argv):
     reproj = False
     basis = False
     axisangle = False
+    normalise = False
 
     keep_info = None
     n_dims = None
@@ -262,15 +305,15 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbai:k:d:",
-            ["pca", "reproj", "basis", "axisangle" "ifile=","keep=", "dims="])
+        opts, args = getopt.getopt(argv,"hprbani:k:d:",
+            ["pca", "reproj", "basis", "axisangle", "normalize", "ifile=","keep=", "dims="])
     except getopt.GetoptError:
-        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a")
+        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a -n")
         sys.exit(2)
 
     for opt, arg in opts:
        if opt == '-h':
-           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a")
+           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a -n")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
@@ -280,6 +323,12 @@ def main(argv):
            basis = True
        elif opt in ("-a", "--axisangle"):
            axisangle = True
+           if os.path.exists('pca_traj.txt'):
+               os.remove('pca_traj.txt')
+           print("PCA in Axis-Angle currently not supposted!")
+           sys.exit()
+       elif opt in ("-n", "--normalize"):
+           normalise = True
        elif opt in ("-i", "--ifile"):
            input_file = arg
        elif opt in ("-k", "--keep"):
@@ -299,7 +348,10 @@ def main(argv):
     motion_data = np.array(data['Frames'])
 
     quat_trajectory_dict = decompose_trajectories(motion_data)
-    norm_quat_trajectory_dict = normalize_quaternions(quat_trajectory_dict)
+    if normalise:
+        norm_quat_trajectory_dict = normalize_quaternions(quat_trajectory_dict)
+    else:
+        norm_quat_trajectory_dict = quat_trajectory_dict
     axis_angle_traj_dict = convert_to_axis_angle(norm_quat_trajectory_dict)
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
@@ -324,8 +376,6 @@ def main(argv):
         pca_extract(tf_pca, pca_traj_dict, norm_quat_trajectory_dict,
                     key_list, n_dims=n_dims, keep_info=keep_info, pca=pca,
                     reproj=reproj, basis=basis, axisangle=axisangle)
-
-    info_retained = float(round(info_retained, 6))
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
