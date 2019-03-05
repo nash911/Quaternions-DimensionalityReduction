@@ -24,7 +24,6 @@ class TF_PCA:
         self.singular_values = None
         self.sigma = None
 
-
     def fit(self):
         self.graph = tf.Graph()
         with self.graph.as_default():
@@ -86,8 +85,7 @@ class TF_PCA:
             reproj = tf.matmul(u, tf.matmul(sigma, v, transpose_b=True))
 
         with tf.Session(graph=self.graph) as session:
-            return keep_info, n_dims, session.run(reproj,
-                                                  feed_dict={self.X: self.data})
+            return keep_info, n_dims, session.run(reproj)
 
 
     def basis(self, n_dims=None, keep_info=None):
@@ -263,6 +261,8 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         # reprojected trajectories
         unchanged_traj = concatenate_trajectories(trajectory_dict, key_list,
                                                   include=True)
+        # Remove non-controlable DOFs from reprojected trajectories, if exists
+        reproj_traj = reproj_traj[:, -36:reproj_traj.shape[1]]
         pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
                                               reproj_traj)).tolist()
 
@@ -274,7 +274,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
             pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
 
     if basis:
-        # Get full-rank basis vectors of the linear sub-space
+        # Get full-rank basis vectors of the linear sub-space: ∑ V^T
         info_retained, num_dims_retained, basis_v = \
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims)
 
@@ -352,13 +352,16 @@ def main(argv):
         norm_quat_trajectory_dict = normalize_quaternions(quat_trajectory_dict)
     else:
         norm_quat_trajectory_dict = quat_trajectory_dict
-    axis_angle_traj_dict = convert_to_axis_angle(norm_quat_trajectory_dict)
+
+    if axisangle:
+        axis_angle_traj_dict = convert_to_axis_angle(norm_quat_trajectory_dict)
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
     quat_traj_matrix = concatenate_trajectories(norm_quat_trajectory_dict,
                                                 key_list, include=False)
-    axisangle_traj_matrix = concatenate_trajectories(axis_angle_traj_dict,
-                                                     key_list, include=False)
+    if axisangle:
+        axisangle_traj_matrix = concatenate_trajectories(axis_angle_traj_dict,
+                                                         key_list, include=False)
 
     # Create a TF PCA object
     if axisangle:
@@ -371,6 +374,8 @@ def main(argv):
 
     # Create a clone of the input file dictionary
     pca_traj_dict = data.copy()
+
+    key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     info_retained, num_dims_retained, pca_traj_dict = \
         pca_extract(tf_pca, pca_traj_dict, norm_quat_trajectory_dict,
