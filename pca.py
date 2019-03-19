@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.linalg import pinv
 from Quaternion import Quat, normalize
 import tensorflow as tf
 import math
@@ -221,7 +222,7 @@ def convert_to_quaternion(axis_angle_dict, k_list):
     return quat_dict
 
 
-def check_orthogonality(c_vecs, n_dims):
+def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
     num_vecs = c_vecs.shape[0]
     vec_list = [c_vecs[i, :] for i in range(num_vecs)]
 
@@ -234,7 +235,7 @@ def check_orthogonality(c_vecs, n_dims):
     for i in range(num_vecs):
         for j in range(i+1, num_vecs):
             dot_prod = np.matmul(vec_list[i], vec_list[j].T)
-            if dot_prod > 1e-6:
+            if dot_prod > decimal:
                 print(dot_prod)
                 orthogonal = False
                 break
@@ -243,7 +244,7 @@ def check_orthogonality(c_vecs, n_dims):
 
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
-                keep_info=0.9, pca=True, reproj=True, basis=True,
+                keep_info=0.9, pca=True, reproj=True, basis=True, vinv=False,
                 axisangle=False):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
@@ -278,13 +279,25 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         info_retained, num_dims_retained, basis_v = \
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims)
 
-        if not check_orthogonality(basis_v, n_dims):
+        if not check_orthogonality(basis_v, n_dims, decimal=1e-6):
             if os.path.exists('pca_traj.txt'):
                 os.remove('pca_traj.txt')
             print("Error: Basis Vectors not Orthogonal!")
             sys.exit()
 
         pca_traj_dict['Basis'] = basis_v.tolist()
+
+    if vinv:
+        # Get pseudo-inverse of matrix V: (V^-1)^T
+        v_pinv = pinv(tf_pca.v[:, 0:n_dims]).T
+        pca_traj_dict['V_Inv'] = v_pinv.tolist()
+
+        _, _, u_sigma = tf_pca.reduce(keep_info=keep_info, n_dims=n_dims)
+        np.testing.assert_array_almost_equal(np.matmul(tf_pca.data, v_pinv),
+                                             u_sigma, decimal=5)
+
+        if not check_orthogonality(v_pinv, n_dims=36, decimal=1e-6):
+            print("Warning: V_Inv Vectors not Orthogonal!")
 
     return info_retained, num_dims_retained, pca_traj_dict
 
@@ -295,6 +308,7 @@ def main(argv):
     pca = False
     reproj = False
     basis = False
+    vinv = False
     axisangle = False
     normalise = False
 
@@ -305,15 +319,15 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbani:k:d:",
-            ["pca", "reproj", "basis", "axisangle", "normalize", "ifile=","keep=", "dims="])
+        opts, args = getopt.getopt(argv,"hprbvani:k:d:",
+            ["pca", "reproj", "basis", "vinv", "axisangle", "normalize", "ifile=","keep=", "dims="])
     except getopt.GetoptError:
-        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a -n")
+        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n")
         sys.exit(2)
 
     for opt, arg in opts:
        if opt == '-h':
-           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -a -n")
+           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
@@ -321,6 +335,8 @@ def main(argv):
            reproj = True
        elif opt in ("-b", "--basis"):
            basis = True
+       elif opt in ("-v", "--vinv"):
+           vinv = True
        elif opt in ("-a", "--axisangle"):
            axisangle = True
            if os.path.exists('pca_traj.txt'):
@@ -380,7 +396,7 @@ def main(argv):
     info_retained, num_dims_retained, pca_traj_dict = \
         pca_extract(tf_pca, pca_traj_dict, norm_quat_trajectory_dict,
                     key_list, n_dims=n_dims, keep_info=keep_info, pca=pca,
-                    reproj=reproj, basis=basis, axisangle=axisangle)
+                    reproj=reproj, basis=basis, vinv=vinv, axisangle=axisangle)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
