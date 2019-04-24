@@ -52,18 +52,27 @@ class TF_PCA:
             index = next(idx for idx, value in enumerate(ladder) if value >= keep_info) + 1
             n_dims = index
         else:
-            keep_info = ladder[n_dims - 1]
+            if n_dims < 0:
+                ladder = np.cumsum(np.flip(normalized_singular_values))
+            keep_info = ladder[abs(n_dims) - 1]
 
         return n_dims, keep_info
 
 
     def reduce(self, n_dims=None, keep_info=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
+        total_dims = self.data.shape[1]
+
+        if n_dims >= 0:
+            start_idx = 0
+        else:
+            start_idx = total_dims + n_dims
 
         with self.graph.as_default():
             # Cut out the relevant part from ∑ and U
-            sigma = tf.slice(self.sigma, [0, 0], [n_dims, n_dims])
-            u = tf.slice(self.u, [0, 0], [self.data.shape[0], n_dims])
+            sigma = tf.slice(self.sigma, [start_idx, start_idx],
+                             [abs(n_dims), abs(n_dims)])
+            u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
 
             # PCA
             pca = tf.matmul(u, sigma)
@@ -75,12 +84,19 @@ class TF_PCA:
 
     def reproject(self, n_dims=None, keep_info=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
+        total_dims = self.data.shape[1]
+
+        if n_dims >= 0:
+            start_idx = 0
+        else:
+            start_idx = total_dims + n_dims
 
         with self.graph.as_default():
             # Cut out the relevant part from ∑, U and V
-            sigma = tf.slice(self.sigma, [0, 0], [n_dims, n_dims])
-            u = tf.slice(self.u, [0, 0], [self.data.shape[0], n_dims])
-            v = tf.slice(self.v, [0, 0], [self.data.shape[1], n_dims])
+            sigma = tf.slice(self.sigma, [start_idx, start_idx],
+                             [abs(n_dims), abs(n_dims)])
+            u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
+            v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
 
             # Reproject on to linear subspace spanned by Principle Components
             reproj = tf.matmul(u, tf.matmul(sigma, v, transpose_b=True))
@@ -91,8 +107,13 @@ class TF_PCA:
 
     def basis(self, n_dims=None, keep_info=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
-        return keep_info, n_dims, np.matmul(self.sigma[0:n_dims, 0:n_dims],
-                                            self.v[:, 0:n_dims].T)
+
+        if n_dims >= 0:
+            b = np.matmul(self.sigma[0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
+        else:
+            b = np.matmul(self.sigma[n_dims:, n_dims:], self.v[:, n_dims:].T)
+
+        return keep_info, n_dims, b
 
     def pc_mean_std(self, n_dims=None, keep_info=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
@@ -126,11 +147,16 @@ def plot(data):
     plt.show()
 
 
-def concatenate_trajectories(trajs_dict, key_list = [], include=False):
+def concatenate_trajectories(trajs_dict, key_list = [], include=False,
+                             fixed_root_pos=False, fixed_root_rot=False):
     trajs_data = []
     for k, v in trajs_dict.items():
         if include:
             if k in key_list:
+                if k == 'root_position' and fixed_root_pos:
+                    v = (np.ones_like(v) * v[0]).tolist()
+                if k == 'root_rotation' and fixed_root_pos:
+                    v = (np.ones_like(v) * v[0]).tolist()
                 trajs_data.append(v)
         if not include:
             if not k in key_list:
@@ -229,7 +255,7 @@ def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
     orthogonal = True
 
     mat_mul = np.matmul(c_vecs, c_vecs.T)
-    if np.allclose(mat_mul, np.eye(n_dims), rtol=1e-05, atol=1e-05):
+    if np.allclose(mat_mul, np.eye(abs(n_dims)), rtol=1e-05, atol=1e-05):
         print("WARNING: Basis vectors are Normal!")
 
     for i in range(num_vecs):
@@ -245,7 +271,7 @@ def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, vinv=False,
-                axisangle=False):
+                axisangle=False, fixed_root_pos=False, fixed_root_rot=False):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -261,7 +287,9 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         # Replace original trajectories, in the controlable DOFs, with
         # reprojected trajectories
         unchanged_traj = concatenate_trajectories(trajectory_dict, key_list,
-                                                  include=True)
+                                                  include=True,
+                                                  fixed_root_pos=fixed_root_pos,
+                                                  fixed_root_rot=fixed_root_rot)
         # Remove non-controlable DOFs from reprojected trajectories, if exists
         reproj_traj = reproj_traj[:, -36:reproj_traj.shape[1]]
         pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
@@ -311,6 +339,8 @@ def main(argv):
     vinv = False
     axisangle = False
     normalise = False
+    fixed_root_pos = False
+    fixed_root_rot = False
 
     keep_info = None
     n_dims = None
@@ -319,15 +349,15 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbvani:k:d:",
-            ["pca", "reproj", "basis", "vinv", "axisangle", "normalize", "ifile=","keep=", "dims="])
+        opts, args = getopt.getopt(argv,"hprbvanfi:k:d:",
+            ["pca", "reproj", "basis", "vinv", "axisangle", "normalize", "fixed", "ifile=","keep=", "dims="])
     except getopt.GetoptError:
-        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n")
+        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n -f")
         sys.exit(2)
 
     for opt, arg in opts:
        if opt == '-h':
-           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n")
+           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n -f")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
@@ -354,6 +384,9 @@ def main(argv):
                n_dims = 36
            else:
                n_dims = int(arg)
+       elif opt in ("-f", "--fixed"):
+           fixed_root_pos = True
+           fixed_root_rot = True
 
     if keep_info is None and n_dims is None:
         keep_info = 0.9
@@ -396,7 +429,8 @@ def main(argv):
     info_retained, num_dims_retained, pca_traj_dict = \
         pca_extract(tf_pca, pca_traj_dict, norm_quat_trajectory_dict,
                     key_list, n_dims=n_dims, keep_info=keep_info, pca=pca,
-                    reproj=reproj, basis=basis, vinv=vinv, axisangle=axisangle)
+                    reproj=reproj, basis=basis, vinv=vinv, axisangle=axisangle,
+                    fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
