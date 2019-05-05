@@ -10,6 +10,7 @@ import os
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.stats import ortho_group
 
 
 class TF_PCA:
@@ -40,7 +41,9 @@ class TF_PCA:
             self.u, self.singular_values, self.sigma, self.v = session.run(
                 [u, singular_values, sigma, v], feed_dict={self.X: self.data})
 
-    def calc_info_and_dims(self, n_dims=None, keep_info=None):
+    def calc_info_and_dims(self, n_dims=None, keep_info=None, single_pca=False):
+        total_dims = self.data.shape[1]
+
         # Normalize singular values
         normalized_singular_values = self.singular_values / sum(self.singular_values)
 
@@ -52,9 +55,15 @@ class TF_PCA:
             index = next(idx for idx, value in enumerate(ladder) if value >= keep_info) + 1
             n_dims = index
         else:
-            if n_dims < 0:
-                ladder = np.cumsum(np.flip(normalized_singular_values))
-            keep_info = ladder[abs(n_dims) - 1]
+            if single_pca:
+                if n_dims < 0:
+                    keep_info = normalized_singular_values[total_dims+n_dims]
+                else:
+                    keep_info = normalized_singular_values[n_dims-1]
+            else:
+                if n_dims < 0:
+                    ladder = np.cumsum(np.flip(normalized_singular_values))
+                keep_info = ladder[abs(n_dims)-1]
 
         return n_dims, keep_info
 
@@ -82,21 +91,32 @@ class TF_PCA:
                                                   feed_dict={self.X: self.data})
 
 
-    def reproject(self, n_dims=None, keep_info=None):
-        n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
+    def reproject(self, n_dims=None, keep_info=None, single_pca=False):
+        n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
         total_dims = self.data.shape[1]
 
-        if n_dims >= 0:
-            start_idx = 0
-        else:
-            start_idx = total_dims + n_dims
-
         with self.graph.as_default():
-            # Cut out the relevant part from ∑, U and V
-            sigma = tf.slice(self.sigma, [start_idx, start_idx],
-                             [abs(n_dims), abs(n_dims)])
-            u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
-            v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
+            if single_pca:
+                if n_dims >= 0:
+                    start_idx = n_dims - 1
+                else:
+                    start_idx = total_dims + n_dims
+
+                # Cut out the relevant part from ∑, U and V
+                sigma = tf.slice(self.sigma, [start_idx, start_idx],
+                                 [1, 1])
+                u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], 1])
+                v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], 1])
+            else:
+                if n_dims >= 0:
+                    start_idx = 0
+                else:
+                    start_idx = total_dims + n_dims
+                # Cut out the relevant part from ∑, U and V
+                sigma = tf.slice(self.sigma, [start_idx, start_idx],
+                                 [abs(n_dims), abs(n_dims)])
+                u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
+                v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
 
             # Reproject on to linear subspace spanned by Principle Components
             reproj = tf.matmul(u, tf.matmul(sigma, v, transpose_b=True))
@@ -105,8 +125,8 @@ class TF_PCA:
             return keep_info, n_dims, session.run(reproj)
 
 
-    def basis(self, n_dims=None, keep_info=None):
-        n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
+    def basis(self, n_dims=None, keep_info=None, single_pca=False):
+        n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
 
         if n_dims >= 0:
             b = np.matmul(self.sigma[0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
@@ -161,11 +181,10 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
         if not include:
             if not k in key_list:
                 trajs_data.append(v)
-
     return np.column_stack(trajs_data)
 
 
-def decompose_trajectories(motion_data):
+def decompose_quat_trajectories(motion_data):
     # Decomposes trajectories into indificual DOFs by joint name
     quat_trajs = OrderedDict()
 
@@ -190,6 +209,31 @@ def decompose_trajectories(motion_data):
 
     return quat_trajs
 
+
+def decompose_euler_trajectories(motion_data):
+    # Decomposes trajectories into indificual DOFs by joint name
+    quat_trajs = OrderedDict()
+
+    quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
+    quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
+    quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
+
+    quat_trajs['chest_rotation'] = np.array(motion_data[:,8:11]) # Quaternion
+    quat_trajs['neck_rotation'] = np.array(motion_data[:,11:14]) # Quaternion
+
+    quat_trajs['right_hip_rotation'] = np.array(motion_data[:,14:17]) # EulerAngle
+    quat_trajs['right_knee_rotation'] = np.array(motion_data[:,17:18]) # 1D Joint
+    quat_trajs['right_ankle_rotation'] = np.array(motion_data[:,18:21]) # EulerAngle
+    quat_trajs['right_shoulder_rotation'] = np.array(motion_data[:,21:24]) # EulerAngle
+    quat_trajs['right_elbow_rotation'] = np.array(motion_data[:,24:25]) # 1D Joint
+
+    quat_trajs['left_hip_rotation'] = np.array(motion_data[:,25:28]) # EulerAngle
+    quat_trajs['left_knee_rotation'] = np.array(motion_data[:,28:29]) # 1D Joint
+    quat_trajs['left_ankle_rotation'] = np.array(motion_data[:,29:32]) # EulerAngle
+    quat_trajs['left_shoulder_rotation'] = np.array(motion_data[:,32:35]) # EulerAngle
+    quat_trajs['left_elbow_rotation'] = np.array(motion_data[:,35:36]) # 1D Joint
+
+    return quat_trajs
 
 def normalize_quaternions(quat_dict):
     norm_quat_dict = OrderedDict()
@@ -247,6 +291,68 @@ def convert_to_quaternion(axis_angle_dict, k_list):
 
     return quat_dict
 
+def convert_quat_to_euler(quat_dict, k_list):
+    euler_dict = OrderedDict()
+
+    for k, v in quat_dict.items():
+        if v.shape[1] == 4 and k not in k_list:
+            euler_angles = []
+            for r in v:
+                q = np.array([r[1], r[2], r[3], r[0]]) # [x, y, z, w]
+                nq = Quat(normalize(q))
+                nq_v = nq._get_q()
+                w = nq_v[3]
+                x = nq_v[0]
+                y = nq_v[1]
+                z = nq_v[2]
+
+                # roll (x-axis rotation)
+                t0 = +2.0 * (w * x + y * z)
+                t1 = +1.0 - 2.0 * (x * x + y * y)
+                roll = math.atan2(t0, t1)
+
+                # pitch (y-axis rotation)
+                t2 = +2.0 * (w * y - z * x)
+                t2 = +1.0 if t2 > +1.0 else t2
+                t2 = -1.0 if t2 < -1.0 else t2
+                pitch = math.asin(t2)
+
+                # yaw (z-axis rotation)
+                t3 = +2.0 * (w * z + x * y)
+                t4 = +1.0 - 2.0 * (y * y + z * z)
+                yaw = math.atan2(t3, t4)
+
+                euler_angles.append([roll, pitch, yaw])
+            euler_dict[k] = np.array(euler_angles)
+        else:
+            euler_dict[k] = v
+
+    return euler_dict
+
+
+def convert_euler_to_quat(euler_dict, key_list):
+    quat_dict = OrderedDict()
+
+    for k, v in euler_dict.items():
+        if v.shape[1] == 3 and k not in key_list:
+            quats = []
+            for r in v:
+                roll = r[0]
+                pitch = r[1]
+                yaw = r[2]
+
+                qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+                qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
+                qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
+                qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+
+                quats.append([qw, qx, qy, qz])
+            quat_dict[k] = np.array(quats)
+        else:
+            quat_dict[k] = v
+
+    return quat_dict
+
 
 def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
     num_vecs = c_vecs.shape[0]
@@ -271,18 +377,21 @@ def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, vinv=False,
-                axisangle=False, fixed_root_pos=False, fixed_root_rot=False):
+                axisangle=False, eulerangle=False, fixed_root_pos=False,
+                fixed_root_rot=False, single_pca=False, graph=False):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
             tf_pca.reduce(keep_info=keep_info, n_dims=n_dims)
         pca_traj_dict['Reduced'] = reduced.tolist()
-        #plot(reduced)
+        if graph:
+            plot(reduced)
 
     if reproj:
         # Reproject the trajectories on to a linear sub-space in the full space: U ∑ V^T
         info_retained, num_dims_retained, reproj_traj = \
-            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims)
+            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims,
+                             single_pca=single_pca)
 
         # Replace original trajectories, in the controlable DOFs, with
         # reprojected trajectories
@@ -297,15 +406,22 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
 
         if axisangle:
             # Convert back to Quaternions
-            mixed_dict = decompose_trajectories(np.array(pca_traj_dict['Frames']))
+            mixed_dict = decompose_quat_trajectories(np.array(pca_traj_dict['Frames']))
             quat_dict = convert_to_quaternion(mixed_dict, key_list)
+            concat_quat_trajs = concatenate_trajectories(quat_dict)
+            pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
+
+        if eulerangle:
+            # Convert back to Quaternions
+            mixed_dict = decompose_euler_trajectories(np.array(pca_traj_dict['Frames']))
+            quat_dict = convert_euler_to_quat(mixed_dict, key_list)
             concat_quat_trajs = concatenate_trajectories(quat_dict)
             pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
 
     if basis:
         # Get full-rank basis vectors of the linear sub-space: ∑ V^T
         info_retained, num_dims_retained, basis_v = \
-            tf_pca.basis(keep_info=keep_info, n_dims=n_dims)
+            tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca)
 
         if not check_orthogonality(basis_v, n_dims, decimal=1e-6):
             if os.path.exists('pca_traj.txt'):
@@ -338,9 +454,12 @@ def main(argv):
     basis = False
     vinv = False
     axisangle = False
+    eulerangle = False
     normalise = False
     fixed_root_pos = False
     fixed_root_rot = False
+    single_pca = False
+    graph = False
 
     keep_info = None
     n_dims = None
@@ -349,15 +468,16 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbvanfi:k:d:",
-            ["pca", "reproj", "basis", "vinv", "axisangle", "normalize", "fixed", "ifile=","keep=", "dims="])
+        opts, args = getopt.getopt(argv,"hprbvaenfsgi:k:d:",
+            ["pca", "reproj", "basis", "vinv", "axisangle", "eulerangle",
+             "normalize", "fixed", "single", "graph", "ifile=","keep=", "dims="])
     except getopt.GetoptError:
-        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n -f")
+        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -e -n -f -s -g")
         sys.exit(2)
 
     for opt, arg in opts:
        if opt == '-h':
-           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -n -f")
+           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -e -n -f -s -g")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
@@ -373,6 +493,8 @@ def main(argv):
                os.remove('pca_traj.txt')
            print("PCA in Axis-Angle currently not supposted!")
            sys.exit()
+       elif opt in ("-e", "--eulerangle"):
+           eulerangle = True
        elif opt in ("-n", "--normalize"):
            normalise = True
        elif opt in ("-i", "--ifile"):
@@ -387,6 +509,10 @@ def main(argv):
        elif opt in ("-f", "--fixed"):
            fixed_root_pos = True
            fixed_root_rot = True
+       elif opt in ("-s", "--single"):
+           single_pca = True
+       elif opt in ("-g", "--graph"):
+           graph = True
 
     if keep_info is None and n_dims is None:
         keep_info = 0.9
@@ -396,17 +522,21 @@ def main(argv):
 
     motion_data = np.array(data['Frames'])
 
-    quat_trajectory_dict = decompose_trajectories(motion_data)
+    key_list = ['frame_duration', 'root_position', 'root_rotation']
+
+    quat_trajectory_dict = decompose_quat_trajectories(motion_data)
     if normalise:
-        norm_quat_trajectory_dict = normalize_quaternions(quat_trajectory_dict)
+        norm_trajectory_dict = normalize_quaternions(quat_trajectory_dict)
     else:
-        norm_quat_trajectory_dict = quat_trajectory_dict
+        norm_trajectory_dict = quat_trajectory_dict
 
     if axisangle:
-        axis_angle_traj_dict = convert_to_axis_angle(norm_quat_trajectory_dict)
+        axis_angle_traj_dict = convert_to_axis_angle(norm_trajectory_dict)
 
-    key_list = ['frame_duration', 'root_position', 'root_rotation']
-    quat_traj_matrix = concatenate_trajectories(norm_quat_trajectory_dict,
+    if eulerangle:
+        norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict,
+                                                          key_list)
+    quat_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
                                                 key_list, include=False)
     if axisangle:
         axisangle_traj_matrix = concatenate_trajectories(axis_angle_traj_dict,
@@ -424,13 +554,21 @@ def main(argv):
     # Create a clone of the input file dictionary
     pca_traj_dict = data.copy()
 
+    # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
+    if eulerangle:
+        pca_traj_dict['Domain'] = "Eulerangle"
+    else:
+        pca_traj_dict['Domain'] = "Quaternion"
+
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     info_retained, num_dims_retained, pca_traj_dict = \
-        pca_extract(tf_pca, pca_traj_dict, norm_quat_trajectory_dict,
+        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict,
                     key_list, n_dims=n_dims, keep_info=keep_info, pca=pca,
                     reproj=reproj, basis=basis, vinv=vinv, axisangle=axisangle,
-                    fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot)
+                    eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
+                    fixed_root_rot=fixed_root_rot, single_pca=single_pca,
+                    graph=graph)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
@@ -439,8 +577,9 @@ def main(argv):
     output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
     output_file = input_file.split("/")[-1]
     output_file = output_file.split(".")[0]
-    output_file = output_file_path + output_file + "_" + str(info_retained) + \
-                  "_" + str(num_dims_retained) + ".txt"
+    domain = "euler_" if eulerangle else "quat_"
+    output_file = output_file_path + domain + output_file + "_" + \
+                  str(info_retained) + "_" + str(num_dims_retained) + ".txt"
 
     # Save pca trajectories and basis dictionary on to the created output file
     with open(output_file, 'w') as fp:
