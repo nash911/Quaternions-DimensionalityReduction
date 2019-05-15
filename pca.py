@@ -152,6 +152,12 @@ class TF_PCA:
         with tf.Session(graph=self.graph) as session:
             return session.run([mean, std], feed_dict={self.X: self.data})
 
+    def save_pca(self):
+        if os.path.exists('U.dat'):
+            os.remove('U.dat')
+        np.savetxt('U.dat', self.u, delimiter=',')
+
+
 
 def plot(data):
     # 3-D plot
@@ -550,6 +556,9 @@ def main(argv):
 
     # Compute U, ∑ and V
     tf_pca.fit()
+
+    # Save PCA on file
+    #tf_pca.save_pca()
 
     # Create a clone of the input file dictionary
     pca_traj_dict = data.copy()
