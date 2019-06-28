@@ -382,9 +382,10 @@ def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
 
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
-                keep_info=0.9, pca=True, reproj=True, basis=True, vinv=False,
-                axisangle=False, eulerangle=False, fixed_root_pos=False,
-                fixed_root_rot=False, single_pca=False, graph=False):
+                keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
+                sigma_matrix=False, v_matrix=False, inverse=False, axisangle=False,
+                eulerangle=False, fixed_root_pos=False, fixed_root_rot=False,
+                single_pca=False, graph=False):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -437,7 +438,19 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
 
         pca_traj_dict['Basis'] = basis_v.tolist()
 
-    if vinv:
+    if u_matrix:
+        U = tf_pca.u[:, 0:n_dims]
+        pca_traj_dict['U'] = U.tolist()
+
+    if sigma_matrix:
+        Sigma = tf.slice(tf_pca.sigma, [0, 0], [n_dims, n_dims])
+        pca_traj_dict['Sigma'] = Sigma.tolist()
+
+    if v_matrix:
+        V = tf_pca.v[:, 0:n_dims]
+        pca_traj_dict['V'] = V.tolist()
+
+    if inverse:
         # Get pseudo-inverse of matrix V: (V^-1)^T
         v_pinv = pinv(tf_pca.v[:, 0:n_dims]).T
         pca_traj_dict['V_Inv'] = v_pinv.tolist()
@@ -446,8 +459,23 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         np.testing.assert_array_almost_equal(np.matmul(tf_pca.data, v_pinv),
                                              u_sigma, decimal=5)
 
-        if not check_orthogonality(v_pinv, n_dims=36, decimal=1e-6):
-            print("Warning: V_Inv Vectors not Orthogonal!")
+        # if not check_orthogonality(v_pinv, n_dims=(28 if eulerangle else 36),
+        #                            decimal=1e-6):
+        #     print("Warning: V_Inv Vectors not Orthogonal!")
+
+        # Get pseudo-inverse of matrix (∑ V^T): (∑ V^T)^-1
+        _, _, sigma_v = \
+            tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca)
+        sigma_v_pinv = pinv(sigma_v)
+        pca_traj_dict['Sigma_V_Inv'] = sigma_v_pinv.tolist()
+
+        # u = tf_pca.u[:, 0:n_dims]
+        # np.testing.assert_array_almost_equal(np.matmul(tf_pca.data, sigma_v_pinv),
+        #                                      u, decimal=5)
+
+        # if not check_orthogonality(sigma_v_pinv, n_dims=(28 if eulerangle else 36),
+        #                            decimal=1e-6):
+        #     print("Warning: Sigma_V_Inv Vectors not Orthogonal!")
 
     return info_retained, num_dims_retained, pca_traj_dict
 
@@ -458,7 +486,10 @@ def main(argv):
     pca = False
     reproj = False
     basis = False
-    vinv = False
+    u_matrix = False
+    sigma_matrix = False
+    v_matrix = False
+    inverse = False
     axisangle = False
     eulerangle = False
     normalise = False
@@ -474,16 +505,17 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbvaenfsgi:k:d:",
-            ["pca", "reproj", "basis", "vinv", "axisangle", "eulerangle",
-             "normalize", "fixed", "single", "graph", "ifile=","keep=", "dims="])
+        opts, args = getopt.getopt(argv,"hprbuzvjaenfsgi:k:d:",
+            ["pca", "reproj", "basis", "U", "Sigma", "V", "inv", "axisangle",
+            "eulerangle", "normalize", "fixed", "single", "graph", "ifile=",
+             "keep=", "dims="])
     except getopt.GetoptError:
-        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -e -n -f -s -g")
+        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -u -z -v -j -a -e -n -f -s -g")
         sys.exit(2)
 
     for opt, arg in opts:
        if opt == '-h':
-           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -v -a -e -n -f -s -g")
+           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -u -z -v -j -a -e -n -f -s -g")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
@@ -491,8 +523,14 @@ def main(argv):
            reproj = True
        elif opt in ("-b", "--basis"):
            basis = True
-       elif opt in ("-v", "--vinv"):
-           vinv = True
+       elif opt in ("-u", "--U"):
+           u_matrix = True
+       elif opt in ("-z", "--Sigma"):
+           sigma_matrix = True
+       elif opt in ("-v", "--V"):
+           v_matrix = True
+       elif opt in ("-j", "--inv"):
+           inverse = True
        elif opt in ("-a", "--axisangle"):
            axisangle = True
            if os.path.exists('pca_traj.txt'):
@@ -574,10 +612,11 @@ def main(argv):
     info_retained, num_dims_retained, pca_traj_dict = \
         pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict,
                     key_list, n_dims=n_dims, keep_info=keep_info, pca=pca,
-                    reproj=reproj, basis=basis, vinv=vinv, axisangle=axisangle,
-                    eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
-                    fixed_root_rot=fixed_root_rot, single_pca=single_pca,
-                    graph=graph)
+                    reproj=reproj, basis=basis, u_matrix=u_matrix,
+                    sigma_matrix=sigma_matrix, v_matrix=v_matrix, inverse=inverse,
+                    axisangle=axisangle, eulerangle=eulerangle,
+                    fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
+                    single_pca=single_pca, graph=graph)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
