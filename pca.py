@@ -506,16 +506,26 @@ def main(argv):
 
     try:
         opts, args = getopt.getopt(argv,"hprbuzvjaenfsgi:k:d:",
-            ["pca", "reproj", "basis", "U", "Sigma", "V", "inv", "axisangle",
+            ["help", "pca", "reproj", "basis", "U", "Sigma", "V", "inv", "axisangle",
             "eulerangle", "normalize", "fixed", "single", "graph", "ifile=",
              "keep=", "dims="])
     except getopt.GetoptError:
-        print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -u -z -v -j -a -e -n -f -s -g")
+        print("Usage: pca.py [-i  | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
+              "             [-d | --dims] <num_dims>/'all' [-p | --pca] [-r | --reproj] \n",
+              "             [-b | --basis] [-u | --U] [-z | --Sigma] [-v | --V]\n",
+              "             [-j | --inv] [-a | --axisangle] [-e | --eulerangle] \n",
+              "             [-n | --normalize] [-f | --fixed] [-s | --single] \n",
+              "             [-g | --graph], [-h | --help]")
         sys.exit(2)
 
     for opt, arg in opts:
-       if opt == '-h':
-           print("pca.py -i <inputfile> -k <keep_info> -d <num_dims>/'all' -p -r -b -u -z -v -j -a -e -n -f -s -g")
+       if opt in ("-h", "--help"):
+           print("Usage: pca.py [-i  | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
+                 "             [-d | --dims] <num_dims>/'all' [-p | --pca] [-r | --reproj] \n",
+                 "             [-b | --basis] [-u | --U] [-z | --Sigma] [-v | --V]\n",
+                 "             [-j | --inv] [-a | --axisangle] [-e | --eulerangle] \n",
+                 "             [-n | --normalize] [-f | --fixed] [-s | --single] \n",
+                 "             [-g | --graph], [-h | --help]")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
