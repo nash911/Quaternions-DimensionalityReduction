@@ -360,7 +360,7 @@ def convert_euler_to_quat(euler_dict, key_list):
     return quat_dict
 
 
-def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
+def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06):
     num_vecs = c_vecs.shape[0]
     vec_list = [c_vecs[i, :] for i in range(num_vecs)]
 
@@ -373,7 +373,7 @@ def check_orthogonality(c_vecs, n_dims, decimal=1e-6):
     for i in range(num_vecs):
         for j in range(i+1, num_vecs):
             dot_prod = np.matmul(vec_list[i], vec_list[j].T)
-            if dot_prod > decimal:
+            if dot_prod > orth_tol:
                 print(dot_prod)
                 orthogonal = False
                 break
@@ -385,7 +385,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
                 sigma_matrix=False, v_matrix=False, inverse=False, axisangle=False,
                 eulerangle=False, fixed_root_pos=False, fixed_root_rot=False,
-                single_pca=False, graph=False):
+                single_pca=False, graph=False, orth_tol=1e-06):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -430,7 +430,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         info_retained, num_dims_retained, basis_v = \
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca)
 
-        if not check_orthogonality(basis_v, n_dims, decimal=1e-6):
+        if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol):
             if os.path.exists('pca_traj.txt'):
                 os.remove('pca_traj.txt')
             print("Error: Basis Vectors not Orthogonal!")
@@ -460,7 +460,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                                              u_sigma, decimal=5)
 
         # if not check_orthogonality(v_pinv, n_dims=(28 if eulerangle else 36),
-        #                            decimal=1e-6):
+        #                            decimal=1e-06):
         #     print("Warning: V_Inv Vectors not Orthogonal!")
 
         # Get pseudo-inverse of matrix (∑ V^T): (∑ V^T)^-1
@@ -474,7 +474,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         #                                      u, decimal=5)
 
         # if not check_orthogonality(sigma_v_pinv, n_dims=(28 if eulerangle else 36),
-        #                            decimal=1e-6):
+        #                            decimal=1e-06):
         #     print("Warning: Sigma_V_Inv Vectors not Orthogonal!")
 
     return info_retained, num_dims_retained, pca_traj_dict
@@ -497,6 +497,7 @@ def main(argv):
     fixed_root_rot = False
     single_pca = False
     graph = False
+    orth_tol = 1e-06
 
     keep_info = None
     n_dims = None
@@ -505,27 +506,27 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbuzvjaenfsgi:k:d:",
+        opts, args = getopt.getopt(argv,"hprbuzvjaenfsgi:k:d:t:",
             ["help", "pca", "reproj", "basis", "U", "Sigma", "V", "inv", "axisangle",
             "eulerangle", "normalize", "fixed", "single", "graph", "ifile=",
-             "keep=", "dims="])
+             "keep=", "dims=", "tol="])
     except getopt.GetoptError:
-        print("Usage: pca.py [-i  | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
-              "             [-d | --dims] <num_dims>/'all' [-p | --pca] [-r | --reproj] \n",
-              "             [-b | --basis] [-u | --U] [-z | --Sigma] [-v | --V]\n",
-              "             [-j | --inv] [-a | --axisangle] [-e | --eulerangle] \n",
-              "             [-n | --normalize] [-f | --fixed] [-s | --single] \n",
-              "             [-g | --graph], [-h | --help]")
+        print("Usage: pca.py [-i | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
+              "             [-d | --dims] <num_dims>/'all' [-t | --tol] <orthogonal_tolerance> \n",
+              "             [-p | --pca] [-r | --reproj] [-b | --basis] [-u | --U] \n",
+              "             [-z | --Sigma] [-v | --V] [-j | --inv] [-a | --axisangle] \n",
+              "             [-e | --eulerangle] [-n | --normalize] [-f | --fixed] \n",
+              "             [-s | --single] [-g | --graph], [-h | --help]")
         sys.exit(2)
 
     for opt, arg in opts:
        if opt in ("-h", "--help"):
-           print("Usage: pca.py [-i  | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
-                 "             [-d | --dims] <num_dims>/'all' [-p | --pca] [-r | --reproj] \n",
-                 "             [-b | --basis] [-u | --U] [-z | --Sigma] [-v | --V]\n",
-                 "             [-j | --inv] [-a | --axisangle] [-e | --eulerangle] \n",
-                 "             [-n | --normalize] [-f | --fixed] [-s | --single] \n",
-                 "             [-g | --graph], [-h | --help]")
+           print("Usage: pca.py [-i | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
+                 "             [-d | --dims] <num_dims>/'all' [-t | --tol] <orthogonal_tolerance> \n",
+                 "             [-p | --pca] [-r | --reproj] [-b | --basis] [-u | --U] \n",
+                 "             [-z | --Sigma] [-v | --V] [-j | --inv] [-a | --axisangle] \n",
+                 "             [-e | --eulerangle] [-n | --normalize] [-f | --fixed] \n",
+                 "             [-s | --single] [-g | --graph], [-h | --help]")
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
@@ -567,6 +568,8 @@ def main(argv):
            single_pca = True
        elif opt in ("-g", "--graph"):
            graph = True
+       elif opt in ("-t", "--tol"):
+           orth_tol = float(arg)
 
     if keep_info is None and n_dims is None:
         keep_info = 0.9
@@ -626,7 +629,7 @@ def main(argv):
                     sigma_matrix=sigma_matrix, v_matrix=v_matrix, inverse=inverse,
                     axisangle=axisangle, eulerangle=eulerangle,
                     fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
-                    single_pca=single_pca, graph=graph)
+                    single_pca=single_pca, graph=graph, orth_tol=orth_tol)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
