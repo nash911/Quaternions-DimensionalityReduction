@@ -181,8 +181,8 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
             if k in key_list:
                 if k == 'root_position' and fixed_root_pos:
                     v = (np.ones_like(v) * v[0]).tolist()
-                if k == 'root_rotation' and fixed_root_pos:
-                    v = (np.ones_like(v) * v[0]).tolist()
+                if k == 'root_rotation' and fixed_root_rot:
+                    v = (np.zeros_like(v) + np.array([1, 0, 0, 0])).tolist()
                 trajs_data.append(v)
         if not include:
             if not k in key_list:
