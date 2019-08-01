@@ -480,6 +480,28 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
     return info_retained, num_dims_retained, pca_traj_dict
 
 
+def usage():
+    print("Usage: pca.py [-a | --axisangle] \n"
+          "              [-b | --basis] \n"
+          "              [-d | --dims] <no. of dims>/'all' \n"
+          "              [-e | --eulerangle] \n"
+          "              [-f | --fixed] \n"
+          "              [-g | --graph] \n"
+          "              [-h | --help] \n"
+          "              [-i | --ifile] <input file> \n"
+          "              [-j | --inv] \n"
+          "              [-k | --keep] <% of info. to be retained> \n"
+          "              [-n | --normalize] \n"
+          "              [-p | --pca] \n"
+          "              [-r | --reproj] \n"
+          "              [-s | --single] \n"
+          "              [-t | --tol] <orthogonal tolerance> \n"
+          "              [-u | --U] \n"
+          "              [-v | --V] \n"
+          "              [-z | --Sigma] \n"
+          )
+
+
 def main(argv):
     input_file = 'humanoid3d_run.txt'
 
@@ -511,22 +533,12 @@ def main(argv):
             "eulerangle", "normalize", "fixed", "single", "graph", "ifile=",
              "keep=", "dims=", "tol="])
     except getopt.GetoptError:
-        print("Usage: pca.py [-i | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
-              "             [-d | --dims] <num_dims>/'all' [-t | --tol] <orthogonal_tolerance> \n",
-              "             [-p | --pca] [-r | --reproj] [-b | --basis] [-u | --U] \n",
-              "             [-z | --Sigma] [-v | --V] [-j | --inv] [-a | --axisangle] \n",
-              "             [-e | --eulerangle] [-n | --normalize] [-f | --fixed] \n",
-              "             [-s | --single] [-g | --graph], [-h | --help]")
+        usage()
         sys.exit(2)
 
     for opt, arg in opts:
        if opt in ("-h", "--help"):
-           print("Usage: pca.py [-i | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
-                 "             [-d | --dims] <num_dims>/'all' [-t | --tol] <orthogonal_tolerance> \n",
-                 "             [-p | --pca] [-r | --reproj] [-b | --basis] [-u | --U] \n",
-                 "             [-z | --Sigma] [-v | --V] [-j | --inv] [-a | --axisangle] \n",
-                 "             [-e | --eulerangle] [-n | --normalize] [-f | --fixed] \n",
-                 "             [-s | --single] [-g | --graph], [-h | --help]")
+           usage()
            sys.exit()
        elif opt in ("-p", "--pca"):
            pca = True
