@@ -191,7 +191,7 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
 
 
 def decompose_quat_trajectories(motion_data):
-    # Decomposes trajectories into indificual DOFs by joint name
+    # Decomposes trajectories into individual joints (by name)
     quat_trajs = OrderedDict()
 
     quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
@@ -217,7 +217,7 @@ def decompose_quat_trajectories(motion_data):
 
 
 def decompose_euler_trajectories(motion_data):
-    # Decomposes trajectories into indificual DOFs by joint name
+    # Decomposes trajectories into individual joints (by name)
     quat_trajs = OrderedDict()
 
     quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
@@ -467,7 +467,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         _, _, sigma_v = \
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca)
         sigma_v_pinv = pinv(sigma_v)
-        pca_traj_dict['Sigma_V_Inv'] = sigma_v_pinv.tolist()
+        pca_traj_dict['Basis_Inv'] = sigma_v_pinv.tolist()
 
         # u = tf_pca.u[:, 0:n_dims]
         # np.testing.assert_array_almost_equal(np.matmul(tf_pca.data, sigma_v_pinv),
@@ -475,7 +475,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
 
         # if not check_orthogonality(sigma_v_pinv, n_dims=(28 if eulerangle else 36),
         #                            decimal=1e-06):
-        #     print("Warning: Sigma_V_Inv Vectors not Orthogonal!")
+        #     print("Warning: Basis_Inv Vectors not Orthogonal!")
 
     return info_retained, num_dims_retained, pca_traj_dict
 
@@ -488,9 +488,9 @@ def usage():
           "              [-f | --fixed] \n"
           "              [-g | --graph] \n"
           "              [-h | --help] \n"
-          "              [-i | --ifile] <input file> \n"
-          "              [-j | --inv] \n"
+          "              [-i | --inv] \n"
           "              [-k | --keep] <% of info. to be retained> \n"
+          "              [-m | --mfile] <input motion file> \n"
           "              [-n | --normalize] \n"
           "              [-p | --pca] \n"
           "              [-r | --reproj] \n"
@@ -503,8 +503,7 @@ def usage():
 
 
 def main(argv):
-    input_file = 'humanoid3d_run.txt'
-
+    motion_file = None
     pca = False
     reproj = False
     basis = False
@@ -528,9 +527,9 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbuzvjaenfsgi:k:d:t:",
+        opts, args = getopt.getopt(argv,"hprbuzviaenfsgm:k:d:t:",
             ["help", "pca", "reproj", "basis", "U", "Sigma", "V", "inv", "axisangle",
-            "eulerangle", "normalize", "fixed", "single", "graph", "ifile=",
+            "eulerangle", "normalize", "fixed", "single", "graph", "mfile=",
              "keep=", "dims=", "tol="])
     except getopt.GetoptError:
         usage()
@@ -552,7 +551,7 @@ def main(argv):
            sigma_matrix = True
        elif opt in ("-v", "--V"):
            v_matrix = True
-       elif opt in ("-j", "--inv"):
+       elif opt in ("-i", "--inv"):
            inverse = True
        elif opt in ("-a", "--axisangle"):
            axisangle = True
@@ -564,8 +563,8 @@ def main(argv):
            eulerangle = True
        elif opt in ("-n", "--normalize"):
            normalise = True
-       elif opt in ("-i", "--ifile"):
-           input_file = arg
+       elif opt in ("-m", "--mfile"):
+           motion_file = arg
        elif opt in ("-k", "--keep"):
            keep_info = float(arg)
        elif opt in ("-d", "--dims"):
@@ -586,7 +585,7 @@ def main(argv):
     if keep_info is None and n_dims is None:
         keep_info = 0.9
 
-    with open(input_file) as f:
+    with open(motion_file) as f:
         data = json.load(f)
 
     motion_data = np.array(data['Frames'])
@@ -648,7 +647,7 @@ def main(argv):
 
     # Create output path and file
     output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
-    output_file = input_file.split("/")[-1]
+    output_file = motion_file.split("/")[-1]
     output_file = output_file.split(".")[0]
     domain = "euler_" if eulerangle else "quat_"
     output_file = output_file_path + domain + output_file + "_" + \
