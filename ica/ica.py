@@ -18,7 +18,7 @@ from Quaternion import Quat, normalize
 
 class ICA:
     def __init__(self, data):
-        self.signals = data
+        self.data = data
         self.ica = None
         self.reconstructed_signals = None
         self.mixing_matrix = None
@@ -26,42 +26,27 @@ class ICA:
 
     def fit(self, num_dims):
         self.ica = FastICA(n_components=num_dims)
-        self.reconstructed_signals = self.ica.fit_transform(self.signals)
+        self.reconstructed_signals = self.ica.fit_transform(self.data)
         self.mixing_matrix = self.ica.mixing_  # Get estimated mixing matrix
         self.ica_mean = self.ica.mean_
 
-        print("self.reconstructed_signals.shape: ", self.reconstructed_signals.shape)
-        d = np.dot(self.reconstructed_signals, self.mixing_matrix.T)
-        print("d.shape: ", d.shape)
+    def reproject(self, comp=None, single_component=False):
+        if single_component:
+            signal = self.reconstructed_signals[:,[comp]]
+            mixing_component = self.mixing_matrix.T[[comp],:]
+            return np.dot(signal, mixing_component) + self.ica.mean_
+        else:
+            return np.dot(self.reconstructed_signals, self.mixing_matrix.T) + \
+                self.ica.mean_
 
+    def signals(self):
+        return self.reconstructed_signals#[:,:3] #self.reconstructed_signals
 
-    def reproject(self, num_dims=None, single_ica=False):
-        #return self.reconstructed_signals
-        return np.dot(self.reconstructed_signals, self.mixing_matrix.T) + self.ica.mean_
-
-    def basis(self, num_dims=None, single_ica=False):
+    def basis(self):
         return self.mixing_matrix.T
 
-    def mean(self, num_dims=None, single_ica=False):
+    def mean(self):
         return self.ica_mean
-
-    def pc_mean_std(self, num_dims=None):
-        num_dims, keep_info = self.calc_info_and_dims(num_dims)
-
-        with self.graph.as_default():
-            # Cut out the relevant part from U
-            u = tf.slice(self.u, [0, 0], [self.data.shape[0], num_dims])
-            # μ
-            mu = tf.reduce_mean(u, axis=0, keep_dims=True)
-            # (x - μ)^2
-            devs_squared = tf.square(u - mu)
-            # √∑(x - μ)^2
-            std = tf.sqrt(tf.reduce_mean(devs_squared, axis=0, keep_dims=False))
-            mean = tf.squeeze(mu)
-
-        with tf.Session(graph=self.graph) as session:
-            return session.run([mean, std], feed_dict={self.X: self.data})
-
 
 def plot(data):
     # 3-D plot
@@ -77,7 +62,7 @@ def plot(data):
     plt.show()
 
 
-def concatenate_trajectories(trajs_dict, key_list = [], include=False,
+def concatenate_trajectories(trajs_dict, key_list = [], include=False, tilt=False,
                              fixed_root_pos=False, fixed_root_rot=False):
     trajs_data = []
     for k, v in trajs_dict.items():
@@ -85,8 +70,11 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
             if k in key_list:
                 if k == 'root_position' and fixed_root_pos:
                     v = (np.ones_like(v) * v[0]).tolist()
-                if k == 'root_rotation' and fixed_root_pos:
-                    v = (np.ones_like(v) * v[0]).tolist()
+                if k == 'root_rotation' and fixed_root_rot:
+                    if tilt:
+                        v = (np.ones_like(v) * v[0]).tolist()
+                    else:
+                        v = (np.zeros_like(v) + np.array([1, 0, 0, 0])).tolist()
                 trajs_data.append(v)
         if not include:
             if not k in key_list:
@@ -95,7 +83,7 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
 
 
 def decompose_quat_trajectories(motion_data):
-    # Decomposes trajectories into indificual DOFs by joint name
+    # Decomposes trajectories into individual joints (by name)
     quat_trajs = OrderedDict()
 
     quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
@@ -121,7 +109,7 @@ def decompose_quat_trajectories(motion_data):
 
 
 def decompose_euler_trajectories(motion_data):
-    # Decomposes trajectories into indificual DOFs by joint name
+    # Decomposes trajectories into individual joints (by name)
     quat_trajs = OrderedDict()
 
     quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
@@ -264,51 +252,25 @@ def convert_euler_to_quat(euler_dict, key_list):
     return quat_dict
 
 
-def check_orthogonality(c_vecs, num_dims, decimal=1e-6):
-    num_vecs = c_vecs.shape[0]
-    vec_list = [c_vecs[i, :] for i in range(num_vecs)]
-
-    orthogonal = True
-
-    mat_mul = np.matmul(c_vecs, c_vecs.T)
-    if np.allclose(mat_mul, np.eye(abs(num_dims)), rtol=1e-05, atol=1e-05):
-        print("WARNING: Basis vectors are Normal!")
-
-    for i in range(num_vecs):
-        for j in range(i+1, num_vecs):
-            dot_prod = np.matmul(vec_list[i], vec_list[j].T)
-            if dot_prod > decimal:
-                print(dot_prod)
-                orthogonal = False
-                break
-
-    return orthogonal
-
-
-def ica_extract(ica, ica_traj_dict, trajectory_dict, key_list, num_dims, reproj=True,
-                basis=True, axisangle=False, eulerangle=False, graph=False,
-                fixed_root_pos=False, fixed_root_rot=False, single_ica=False):
+def ica_extract(ica, ica_traj_dict, trajectory_dict, key_list, comp=None,
+                reproj=True, basis=True, eulerangle=False, fixed_root_pos=False,
+                fixed_root_rot=False, tilt=False, single_component=False,
+                graph=False, inverse=True):
     if reproj:
-        # Reproject the trajectories on to a linear sub-space in the full space: U ∑ V^T
-        reproj_traj = ica.reproject(num_dims=num_dims, single_ica=single_ica)
+        # Reproject the trajectories on to a linear sub-space in the full space:
+        # X = SW
+        reproj_traj = ica.reproject(comp=comp, single_component=single_component)
 
         # Replace original trajectories, in the controlable DOFs, with
         # reprojected trajectories
         unchanged_traj = concatenate_trajectories(trajectory_dict, key_list,
-                                                  include=True,
+                                                  include=True, tilt=tilt,
                                                   fixed_root_pos=fixed_root_pos,
                                                   fixed_root_rot=fixed_root_rot)
         # Remove non-controlable DOFs from reprojected trajectories, if exists
-        reproj_traj = reproj_traj[:, -36:reproj_traj.shape[1]]
-        ica_traj_dict['Frames'] = np.column_stack((unchanged_traj,
-                                              reproj_traj)).tolist()
-
-        if axisangle:
-            # Convert back to Quaternions
-            mixed_dict = decompose_quat_trajectories(np.array(ica_traj_dict['Frames']))
-            quat_dict = convert_to_quaternion(mixed_dict, key_list)
-            concat_quat_trajs = concatenate_trajectories(quat_dict)
-            ica_traj_dict['Frames'] = concat_quat_trajs.tolist()
+        reproj_traj = reproj_traj[:, -28:reproj_traj.shape[1]]
+        ica_traj_dict['Frames'] = \
+            np.column_stack((unchanged_traj, reproj_traj)).tolist()
 
         if eulerangle:
             # Convert back to Quaternions
@@ -319,91 +281,94 @@ def ica_extract(ica, ica_traj_dict, trajectory_dict, key_list, num_dims, reproj=
 
     if basis:
         # Get full-rank basis vectors of the linear sub-space: ∑ V^T
-        basis_v = ica.basis(num_dims=num_dims, single_ica=single_ica)
-        mean = ica.mean(num_dims=num_dims, single_ica=single_ica)
-
-        # if not check_orthogonality(basis_v, num_dims, decimal=1e-5):
-        #     if os.path.exists('ica_traj.txt'):
-        #         os.remove('ica_traj.txt')
-        #     print("Error: Basis Vectors not Orthogonal!")
-        #     sys.exit()
-
-        print("basis_v.shape: ", basis_v.shape)
+        basis_v = ica.basis()
+        mean = ica.mean()
 
         ica_traj_dict['Basis'] = basis_v.tolist()
         ica_traj_dict['Reference_Mean'] = mean.tolist()
 
+        if inverse:
+            basis_v_pinv = pinv(ica.basis())
+            ica_traj_dict['Basis_Inv'] = basis_v_pinv.tolist()
+
+    if graph:
+        plot(ica.signals())
+
     return ica_traj_dict
 
 
-def main(argv):
-    input_file = 'humanoid3d_run.txt'
-    num_dims = None
+def usage():
+    print("Usage: ica.py [-b | --basis] \n"
+          "              [-d | --dims] <no. of dims>/'all' \n"
+          "              [-e | --eulerangle] \n"
+          "              [-f | --fixed] \n"
+          "              [-g | --graph] \n"
+          "              [-h | --help] \n"
+          "              [-i | --inv] \n"
+          "              [-m | --mfile] <input motion file> \n"
+          "              [-n | --normalize] \n"
+          "              [-r | --reproj] \n"
+          "              [-s | --single] \n"
+          "              [-t | --tilt] \n"
+          )
 
-    reproj = False
+
+def main(argv):
     basis = False
-    axisangle = False
+    num_dims = None
     eulerangle = False
-    normalise = False
     fixed_root_pos = False
     fixed_root_rot = False
-    single_ica = False
     graph = False
-
+    inverse = False
+    motion_file = None
+    normalise = False
+    reproj = False
+    single_component = False
+    tilt = False
 
 
     try:
-        opts, args = getopt.getopt(argv,"hrmaenfsgi:d:",
-            ["help", "reproj", "mixture", "axisangle", "eulerangle", "normalize",
-             "fixed", "single", "graph", "ifile=", "dims="])
+        opts, args = getopt.getopt(argv,"befghinrstd:m:",
+            ["basis", "eulerangle", "fixed", "graph", "help", "inv", "normalize",
+             "reproj", "single", "tilt", "dims=", "mfile="])
     except getopt.GetoptError:
-        print("Usage: ica.py [-i  | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
-              "             [-d | --dims] <num_dims>/'all' [-p | --ica] [-r | --reproj] \n",
-              "             [-b | --basis] [-u | --U] [-z | --Sigma] [-v | --V]\n",
-              "             [-j | --inv] [-a | --axisangle] [-e | --eulerangle] \n",
-              "             [-n | --normalize] [-f | --fixed] [-s | --single] \n",
-              "             [-g | --graph], [-h | --help]")
+        usage()
         sys.exit(2)
 
     for opt, arg in opts:
-       if opt in ("-h", "--help"):
-           print("Usage: ica.py [-i  | --ifile] <inputfile> [-k | --keep] <keep_info>\n",
-                 "             [-d | --dims] <num_dims>/'all' [-p | --ica] [-r | --reproj] \n",
-                 "             [-b | --basis] [-u | --U] [-z | --Sigma] [-v | --V]\n",
-                 "             [-j | --inv] [-a | --axisangle] [-e | --eulerangle] \n",
-                 "             [-n | --normalize] [-f | --fixed] [-s | --single] \n",
-                 "             [-g | --graph], [-h | --help]")
-           sys.exit()
-       elif opt in ("-r", "--reproj"):
-           reproj = True
-       elif opt in ("-m", "--mixture"):
+       if opt in ("-b", "--basis"):
            basis = True
-       elif opt in ("-a", "--axisangle"):
-           axisangle = True
-           if os.path.exists('ica_traj.txt'):
-               os.remove('ica_traj.txt')
-           print("ICA in Axis-Angle currently not supposted!")
-           sys.exit()
-       elif opt in ("-e", "--eulerangle"):
-           eulerangle = True
-       elif opt in ("-n", "--normalize"):
-           normalise = True
-       elif opt in ("-i", "--ifile"):
-           input_file = arg
        elif opt in ("-d", "--dims"):
            if arg.lower() == 'all':
-               num_dims = 36
+               num_dims = 28
            else:
                num_dims = int(arg)
+       elif opt in ("-e", "--eulerangle"):
+           eulerangle = True
        elif opt in ("-f", "--fixed"):
            fixed_root_pos = True
            fixed_root_rot = True
-       elif opt in ("-s", "--single"):
-           single_ica = True
        elif opt in ("-g", "--graph"):
            graph = True
+       elif opt in ("-h", "--help"):
+           usage()
+           sys.exit()
+       elif opt in ("-i", "--inv"):
+           inverse = True
+       elif opt in ("-m", "--mfile"):
+           motion_file = arg
+       elif opt in ("-n", "--normalize"):
+           normalise = True
+       elif opt in ("-r", "--reproj"):
+           reproj = True
+       elif opt in ("-s", "--single"):
+           single_component = True
+       elif opt in ("-t", "--tilt"):
+           tilt = True
 
-    with open(input_file) as f:
+
+    with open(motion_file) as f:
         data = json.load(f)
 
     motion_data = np.array(data['Frames'])
@@ -416,23 +381,14 @@ def main(argv):
     else:
         norm_trajectory_dict = quat_trajectory_dict
 
-    if axisangle:
-        axis_angle_traj_dict = convert_to_axis_angle(norm_trajectory_dict)
-
     if eulerangle:
         norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict,
                                                           key_list)
     quat_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
                                                 key_list, include=False)
-    if axisangle:
-        axisangle_traj_matrix = concatenate_trajectories(axis_angle_traj_dict,
-                                                         key_list, include=False)
 
     # Create a ICA object
-    if axisangle:
-        ica = ICA(axisangle_traj_matrix)
-    else:
-        ica = ICA(quat_traj_matrix)
+    ica = ICA(quat_traj_matrix)
 
     # Compute U, ∑ and V
     ica.fit(num_dims)
@@ -448,28 +404,44 @@ def main(argv):
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
-    ica_traj_dict = ica_extract(ica, ica_traj_dict, norm_trajectory_dict,
-                    key_list, num_dims=num_dims, reproj=reproj, basis=basis,
-                    axisangle=axisangle, eulerangle=eulerangle, graph=graph,
-                    fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
-                    single_ica=single_ica)
+    if single_component:
+        for dim in range(num_dims):
+            ica_traj_dict = ica_extract(ica, ica_traj_dict, norm_trajectory_dict,
+                            key_list, comp=dim, reproj=reproj, basis=basis,
+                            eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
+                            fixed_root_rot=fixed_root_rot, tilt=tilt, graph=graph,
+                            single_component=True, inverse=False)
 
-    print("No. of dimensions: ", num_dims)
+            # Create output path and file
+            output_file = 'ica_traj' + '_comp-' + str(dim+1) + ".txt"
 
-    # Create output path and file
-    output_file_path = "/home/nash/DeepMimic/data/reduced_motion/ica_"
-    output_file = input_file.split("/")[-1]
-    output_file = output_file.split(".")[0]
-    domain = "euler_" if eulerangle else "quat_"
-    output_file = output_file_path + domain + output_file + "_" + \
-                  str(num_dims) + ".txt"
+            # Save ica trajectories and basis dictionary on to the created output file
+            with open(output_file, 'w') as fp:
+                json.dump(ica_traj_dict, fp, indent=4)
+    else:
+    #if True:
+        ica_traj_dict = ica_extract(ica, ica_traj_dict, norm_trajectory_dict,
+                        key_list, comp=None, reproj=reproj, basis=basis,
+                        eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
+                        fixed_root_rot=fixed_root_rot, tilt=tilt, graph=graph,
+                        single_component=False, inverse=inverse)
 
-    # Save ica trajectories and basis dictionary on to the created output file
-    with open(output_file, 'w') as fp:
-        json.dump(ica_traj_dict, fp, indent=4)
+        print("No. of components: ", num_dims)
 
-    with open('ica_traj.txt', 'w') as fp:
-        json.dump(ica_traj_dict, fp, indent=4)
+        # Create output path and file
+        output_file_path = "/home/nash/DeepMimic/data/reduced_motion/ica_"
+        output_file = motion_file.split("/")[-1]
+        output_file = output_file.split(".")[0]
+        domain = "euler_" if eulerangle else "quat_"
+        output_file = output_file_path + domain + output_file + "_" + \
+                      str(num_dims) + ".txt"
+
+        # Save ica trajectories and basis dictionary on to the created output file
+        with open(output_file, 'w') as fp:
+            json.dump(ica_traj_dict, fp, indent=4)
+
+        with open('ica_traj.txt', 'w') as fp:
+            json.dump(ica_traj_dict, fp, indent=4)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
