@@ -27,7 +27,7 @@ class ICA:
     def fit(self, num_dims):
         self.ica = FastICA(n_components=num_dims)
         self.reconstructed_signals = self.ica.fit_transform(self.data)
-        self.mixing_matrix = self.ica.mixing_  # Get estimated mixing matrix
+        self.mixing_matrix = self.ica.mixing_
         self.ica_mean = self.ica.mean_
 
     def reproject(self, comp=None, single_component=False):
@@ -40,7 +40,7 @@ class ICA:
                 self.ica.mean_
 
     def signals(self):
-        return self.reconstructed_signals#[:,:3] #self.reconstructed_signals
+        return self.reconstructed_signals
 
     def basis(self):
         return self.mixing_matrix.T
@@ -252,10 +252,47 @@ def convert_euler_to_quat(euler_dict, key_list):
     return quat_dict
 
 
+def invert_basis(reduced_motion_file, ref_traj, signals=True, inverse=True):
+    with open(reduced_motion_file) as f:
+        ica_traj_dict = json.load(f)
+    basis = np.array(ica_traj_dict['Basis'])
+    basis_v_pinv = pinv(basis)
+    if inverse:
+        ica_traj_dict['Basis_Inv'] = basis_v_pinv.tolist()
+
+    if signals:
+        independent_signals = np.dot(ref_traj, basis_v_pinv)
+        ica_traj_dict['Signals'] = independent_signals.tolist()
+
+    # Create new output file in the same path
+    index = reduced_motion_file.find('.txt')
+    output_file = reduced_motion_file[:index] + '_inv' + reduced_motion_file[index:]
+    print("Saving basis inverse in file: ", output_file)
+
+    # Save ica trajectories, basis and inverse dictionary on to the created
+    # output file
+    with open(output_file, 'w') as fp:
+        json.dump(ica_traj_dict, fp, indent=4)
+
+    # Delete the previous ica_trajectory file
+    if os.path.exists('ica_traj.txt'):
+        os.remove('ica_traj.txt')
+
+    return
+
+
 def ica_extract(ica, ica_traj_dict, trajectory_dict, key_list, comp=None,
-                reproj=True, basis=True, eulerangle=False, fixed_root_pos=False,
-                fixed_root_rot=False, tilt=False, single_component=False,
-                graph=False, inverse=True):
+                signals=True, reproj=True, basis=True, eulerangle=False,
+                fixed_root_pos=False, fixed_root_rot=False, tilt=False,
+                single_component=False, graph=False, inverse=True):
+
+    if signals:
+        signals = ica.signals()
+        ica_traj_dict['Signals'] = signals.tolist()
+
+        if graph:
+            plot(signals)
+
     if reproj:
         # Reproject the trajectories on to a linear sub-space in the full space:
         # X = SW
@@ -280,7 +317,7 @@ def ica_extract(ica, ica_traj_dict, trajectory_dict, key_list, comp=None,
             ica_traj_dict['Frames'] = concat_quat_trajs.tolist()
 
     if basis:
-        # Get full-rank basis vectors of the linear sub-space: ∑ V^T
+        # Get full-rank basis vectors of the linear sub-space: W
         basis_v = ica.basis()
         mean = ica.mean()
 
@@ -290,9 +327,6 @@ def ica_extract(ica, ica_traj_dict, trajectory_dict, key_list, comp=None,
         if inverse:
             basis_v_pinv = pinv(ica.basis())
             ica_traj_dict['Basis_Inv'] = basis_v_pinv.tolist()
-
-    if graph:
-        plot(ica.signals())
 
     return ica_traj_dict
 
@@ -307,9 +341,11 @@ def usage():
           "              [-i | --inv] \n"
           "              [-m | --mfile] <input motion file> \n"
           "              [-n | --normalize] \n"
+          "              [-o | --ofile] <reduced motion file> \n"
           "              [-r | --reproj] \n"
           "              [-s | --single] \n"
           "              [-t | --tilt] \n"
+          "              [-u | --signals] \n"
           )
 
 
@@ -322,16 +358,18 @@ def main(argv):
     graph = False
     inverse = False
     motion_file = None
+    reduced_motion_file = None
     normalise = False
     reproj = False
     single_component = False
     tilt = False
+    signals = False
 
 
     try:
-        opts, args = getopt.getopt(argv,"befghinrstd:m:",
+        opts, args = getopt.getopt(argv,"befghinrstud:m:o:",
             ["basis", "eulerangle", "fixed", "graph", "help", "inv", "normalize",
-             "reproj", "single", "tilt", "dims=", "mfile="])
+             "reproj", "single", "tilt", "signals", "dims=", "mfile=", "ofile"])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -360,18 +398,22 @@ def main(argv):
            motion_file = arg
        elif opt in ("-n", "--normalize"):
            normalise = True
+       elif opt in ("-o", "--ofile"):
+           reduced_motion_file = arg
        elif opt in ("-r", "--reproj"):
            reproj = True
        elif opt in ("-s", "--single"):
            single_component = True
        elif opt in ("-t", "--tilt"):
            tilt = True
+       elif opt in ("-u", "--signals"):
+           signals = True
 
 
     with open(motion_file) as f:
-        data = json.load(f)
+        motion_file_dict = json.load(f)
 
-    motion_data = np.array(data['Frames'])
+    motion_data = np.array(motion_file_dict['Frames'])
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
@@ -384,19 +426,24 @@ def main(argv):
     if eulerangle:
         norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict,
                                                           key_list)
-    quat_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
-                                                key_list, include=False)
+    traj_matrix = concatenate_trajectories(norm_trajectory_dict, key_list,
+                                           include=False)
+
+    if reduced_motion_file is not None:
+        if signals or inverse:
+            invert_basis(reduced_motion_file, traj_matrix, signals, inverse)
+        return
 
     # Create a ICA object
-    ica = ICA(quat_traj_matrix)
+    ica = ICA(traj_matrix)
 
-    # Compute U, ∑ and V
+    # Compute S, and W
     ica.fit(num_dims)
 
     # Create a clone of the input file dictionary
-    ica_traj_dict = data.copy()
+    ica_traj_dict = motion_file_dict.copy()
 
-    # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
+    # Set the domain of the coordination space (Basis-Vectors - W^T)
     if eulerangle:
         ica_traj_dict['Domain'] = "Eulerangle"
     else:
@@ -407,10 +454,10 @@ def main(argv):
     if single_component:
         for dim in range(num_dims):
             ica_traj_dict = ica_extract(ica, ica_traj_dict, norm_trajectory_dict,
-                            key_list, comp=dim, reproj=reproj, basis=basis,
+                            key_list, signals=signals, reproj=reproj, basis=basis,
                             eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
                             fixed_root_rot=fixed_root_rot, tilt=tilt, graph=graph,
-                            single_component=True, inverse=False)
+                            single_component=True, comp=dim, inverse=False)
 
             # Create output path and file
             output_file = 'ica_traj' + '_comp-' + str(dim+1) + ".txt"
@@ -419,12 +466,11 @@ def main(argv):
             with open(output_file, 'w') as fp:
                 json.dump(ica_traj_dict, fp, indent=4)
     else:
-    #if True:
         ica_traj_dict = ica_extract(ica, ica_traj_dict, norm_trajectory_dict,
-                        key_list, comp=None, reproj=reproj, basis=basis,
+                        key_list, signals=signals, reproj=reproj, basis=basis,
                         eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
                         fixed_root_rot=fixed_root_rot, tilt=tilt, graph=graph,
-                        single_component=False, inverse=inverse)
+                        single_component=False, comp=None, inverse=inverse)
 
         print("No. of components: ", num_dims)
 
