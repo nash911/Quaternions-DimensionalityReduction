@@ -21,34 +21,42 @@ class TF_PCA:
 
         self.graph = None
         self.X = None
+        self.X_mean = None
         self.u = None
         self.v = None
         self.singular_values = None
         self.sigma = None
 
-    def fit(self):
+    def fit(self, normalise=False):
         self.graph = tf.Graph()
         with self.graph.as_default():
             self.X = tf.placeholder(self.dtype, shape=self.data.shape)
 
+            if normalise:
+                # Calculate input mean
+                X_mean = tf.reduce_mean(self.X, axis=0)
+            else:
+                X_mean = tf.zeros(shape=self.data.shape[1], dtype=self.dtype)
+
             # Perform SVD
-            singular_values, u, v = tf.svd(self.X)
+            singular_values, u, v = tf.svd(self.X - X_mean)
 
             # Create ∑ matrix
             sigma = tf.diag(singular_values)
 
         with tf.Session(graph=self.graph) as session:
-            self.u, self.singular_values, self.sigma, self.v = session.run(
-                [u, singular_values, sigma, v], feed_dict={self.X: self.data})
+            self.u, self.singular_values, self.sigma, self.v, self.X_mean = \
+                session.run([u, singular_values, sigma, v, X_mean],
+                            feed_dict={self.X: self.data})
 
     def calc_info_and_dims(self, n_dims=None, keep_info=None, single_pca=False):
         total_dims = self.data.shape[1]
 
         # Normalize singular values
-        normalized_singular_values = self.singular_values / sum(self.singular_values)
+        normalised_singular_values = self.singular_values / sum(self.singular_values)
 
         # Create the aggregated ladder of kept information per dimension
-        ladder = np.cumsum(normalized_singular_values)
+        ladder = np.cumsum(normalised_singular_values)
 
         if keep_info:
             # Get the first index which is above the given information threshold
@@ -57,12 +65,12 @@ class TF_PCA:
         else:
             if single_pca:
                 if n_dims < 0:
-                    keep_info = normalized_singular_values[total_dims+n_dims]
+                    keep_info = normalised_singular_values[total_dims+n_dims]
                 else:
-                    keep_info = normalized_singular_values[n_dims-1]
+                    keep_info = normalised_singular_values[n_dims-1]
             else:
                 if n_dims < 0:
-                    ladder = np.cumsum(np.flip(normalized_singular_values))
+                    ladder = np.cumsum(np.flip(normalised_singular_values))
                 keep_info = ladder[abs(n_dims)-1]
 
         return n_dims, keep_info
@@ -87,8 +95,7 @@ class TF_PCA:
             pca = tf.matmul(u, sigma)
 
         with tf.Session(graph=self.graph) as session:
-            return keep_info, n_dims, session.run(pca,
-                                                  feed_dict={self.X: self.data})
+            return keep_info, n_dims, session.run(pca)
 
 
     def reproject(self, n_dims=None, keep_info=None, single_pca=False):
@@ -119,7 +126,7 @@ class TF_PCA:
                 v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
 
             # Reproject on to linear subspace spanned by Principle Components
-            reproj = tf.matmul(u, tf.matmul(sigma, v, transpose_b=True))
+            reproj = tf.matmul(u, tf.matmul(sigma, v, transpose_b=True)) + self.X_mean
 
         with tf.Session(graph=self.graph) as session:
             return keep_info, n_dims, session.run(reproj)
@@ -156,7 +163,6 @@ class TF_PCA:
         if os.path.exists('U.dat'):
             os.remove('U.dat')
         np.savetxt('U.dat', self.u, delimiter=',')
-
 
 
 def plot(data):
@@ -241,7 +247,7 @@ def decompose_euler_trajectories(motion_data):
 
     return quat_trajs
 
-def normalize_quaternions(quat_dict):
+def normalise_quaternions(quat_dict):
     norm_quat_dict = OrderedDict()
 
     for k, v in quat_dict.items():
@@ -383,8 +389,8 @@ def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06):
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
-                sigma_matrix=False, v_matrix=False, inverse=False, axisangle=False,
-                eulerangle=False, fixed_root_pos=False, fixed_root_rot=False,
+                sigma_matrix=False, v_matrix=False, inverse=False, eulerangle=False,
+                fixed_root_pos=False, fixed_root_rot=False, normalise=False,
                 single_pca=False, graph=False, orth_tol=1e-06):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
@@ -411,12 +417,12 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
                                               reproj_traj)).tolist()
 
-        if axisangle:
-            # Convert back to Quaternions
-            mixed_dict = decompose_quat_trajectories(np.array(pca_traj_dict['Frames']))
-            quat_dict = convert_to_quaternion(mixed_dict, key_list)
-            concat_quat_trajs = concatenate_trajectories(quat_dict)
-            pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
+        # if axisangle:
+        #     # Convert back to Quaternions
+        #     mixed_dict = decompose_quat_trajectories(np.array(pca_traj_dict['Frames']))
+        #     quat_dict = convert_to_quaternion(mixed_dict, key_list)
+        #     concat_quat_trajs = concatenate_trajectories(quat_dict)
+        #     pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
 
         if eulerangle:
             # Convert back to Quaternions
@@ -456,8 +462,8 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         pca_traj_dict['V_Inv'] = v_pinv.tolist()
 
         _, _, u_sigma = tf_pca.reduce(keep_info=keep_info, n_dims=n_dims)
-        np.testing.assert_array_almost_equal(np.matmul(tf_pca.data, v_pinv),
-                                             u_sigma, decimal=5)
+        np.testing.assert_array_almost_equal(
+            np.matmul((tf_pca.data - tf_pca.X_mean), v_pinv), u_sigma, decimal=5)
 
         # if not check_orthogonality(v_pinv, n_dims=(28 if eulerangle else 36),
         #                            decimal=1e-06):
@@ -477,12 +483,15 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         #                            decimal=1e-06):
         #     print("Warning: Basis_Inv Vectors not Orthogonal!")
 
+    if normalise and eulerangle:
+        X_mean = tf_pca.X_mean
+        pca_traj_dict['Reference_Mean'] = X_mean.tolist()
+
     return info_retained, num_dims_retained, pca_traj_dict
 
 
 def usage():
-    print("Usage: pca.py [-a | --axisangle] \n"
-          "              [-b | --basis] \n"
+    print("Usage: pca.py [-b | --basis] \n"
           "              [-d | --dims] <no. of dims>/'all' \n"
           "              [-e | --eulerangle] \n"
           "              [-f | --fixed] \n"
@@ -491,7 +500,7 @@ def usage():
           "              [-i | --inv] \n"
           "              [-k | --keep] <% of info. to be retained> \n"
           "              [-m | --mfile] <input motion file> \n"
-          "              [-n | --normalize] \n"
+          "              [-n | --normalise] \n"
           "              [-p | --pca] \n"
           "              [-r | --reproj] \n"
           "              [-s | --single] \n"
@@ -511,7 +520,6 @@ def main(argv):
     sigma_matrix = False
     v_matrix = False
     inverse = False
-    axisangle = False
     eulerangle = False
     normalise = False
     fixed_root_pos = False
@@ -528,8 +536,8 @@ def main(argv):
 
     try:
         opts, args = getopt.getopt(argv,"hprbuzviaenfsgm:k:d:t:",
-            ["help", "pca", "reproj", "basis", "U", "Sigma", "V", "inv", "axisangle",
-            "eulerangle", "normalize", "fixed", "single", "graph", "mfile=",
+            ["help", "pca", "reproj", "basis", "U", "Sigma", "V", "inv",
+             "eulerangle", "normalise", "fixed", "single", "graph", "mfile=",
              "keep=", "dims=", "tol="])
     except getopt.GetoptError:
         usage()
@@ -553,15 +561,9 @@ def main(argv):
            v_matrix = True
        elif opt in ("-i", "--inv"):
            inverse = True
-       elif opt in ("-a", "--axisangle"):
-           axisangle = True
-           if os.path.exists('pca_traj.txt'):
-               os.remove('pca_traj.txt')
-           print("PCA in Axis-Angle currently not supposted!")
-           sys.exit()
        elif opt in ("-e", "--eulerangle"):
            eulerangle = True
-       elif opt in ("-n", "--normalize"):
+       elif opt in ("-n", "--normalise"):
            normalise = True
        elif opt in ("-m", "--mfile"):
            motion_file = arg
@@ -586,44 +588,32 @@ def main(argv):
         keep_info = 0.9
 
     with open(motion_file) as f:
-        data = json.load(f)
+        motion_file_dict = json.load(f)
 
-    motion_data = np.array(data['Frames'])
+    motion_data = np.array(motion_file_dict['Frames'])
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     quat_trajectory_dict = decompose_quat_trajectories(motion_data)
-    if normalise:
-        norm_trajectory_dict = normalize_quaternions(quat_trajectory_dict)
+    if normalise and not eulerangle:
+        norm_trajectory_dict = normalise_quaternions(quat_trajectory_dict)
     else:
         norm_trajectory_dict = quat_trajectory_dict
-
-    if axisangle:
-        axis_angle_traj_dict = convert_to_axis_angle(norm_trajectory_dict)
 
     if eulerangle:
         norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict,
                                                           key_list)
-    quat_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
+    ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
                                                 key_list, include=False)
-    if axisangle:
-        axisangle_traj_matrix = concatenate_trajectories(axis_angle_traj_dict,
-                                                         key_list, include=False)
 
     # Create a TF PCA object
-    if axisangle:
-        tf_pca = TF_PCA(axisangle_traj_matrix)
-    else:
-        tf_pca = TF_PCA(quat_traj_matrix)
+    tf_pca = TF_PCA(ref_traj_matrix)
 
     # Compute U, ∑ and V
-    tf_pca.fit()
-
-    # Save PCA on file
-    #tf_pca.save_pca()
+    tf_pca.fit(normalise)
 
     # Create a clone of the input file dictionary
-    pca_traj_dict = data.copy()
+    pca_traj_dict = motion_file_dict.copy()
 
     # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
     if eulerangle:
@@ -634,13 +624,13 @@ def main(argv):
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     info_retained, num_dims_retained, pca_traj_dict = \
-        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict,
-                    key_list, n_dims=n_dims, keep_info=keep_info, pca=pca,
-                    reproj=reproj, basis=basis, u_matrix=u_matrix,
-                    sigma_matrix=sigma_matrix, v_matrix=v_matrix, inverse=inverse,
-                    axisangle=axisangle, eulerangle=eulerangle,
+        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list,
+                    n_dims=n_dims, keep_info=keep_info, pca=pca, reproj=reproj,
+                    basis=basis, u_matrix=u_matrix, sigma_matrix=sigma_matrix,
+                    v_matrix=v_matrix, inverse=inverse, eulerangle=eulerangle,
                     fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
-                    single_pca=single_pca, graph=graph, orth_tol=orth_tol)
+                    normalise=normalise, single_pca=single_pca, graph=graph,
+                    orth_tol=orth_tol)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
@@ -659,6 +649,9 @@ def main(argv):
 
     with open('pca_traj.txt', 'w') as fp:
         json.dump(pca_traj_dict, fp, indent=4)
+
+    if eulerangle and not normalise:
+        print("WARNING: Data Not Normalised!")
 
 if __name__ == "__main__":
     main(sys.argv[1:])
