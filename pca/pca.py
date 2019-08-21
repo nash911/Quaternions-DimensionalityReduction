@@ -391,7 +391,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
                 sigma_matrix=False, v_matrix=False, inverse=False, eulerangle=False,
                 fixed_root_pos=False, fixed_root_rot=False, normalise=False,
-                single_pca=False, graph=False, orth_tol=1e-06):
+                single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -449,8 +449,10 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         pca_traj_dict['U'] = U.tolist()
 
     if sigma_matrix:
-        Sigma = tf.slice(tf_pca.sigma, [0, 0], [n_dims, n_dims])
+        Sigma = tf_pca.sigma[:n_dims, :n_dims]
+        Singular_values = tf_pca.singular_values[:n_dims]
         pca_traj_dict['Sigma'] = Sigma.tolist()
+        pca_traj_dict['Singular_Values'] = Singular_values.tolist()
 
     if v_matrix:
         V = tf_pca.v[:, 0:n_dims]
@@ -487,11 +489,16 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         X_mean = tf_pca.X_mean
         pca_traj_dict['Reference_Mean'] = X_mean.tolist()
 
+    if activ_stat:
+        pca_traj_dict['Excite_Min'] = np.min(tf_pca.u[:, 0:n_dims], axis=0).tolist()
+        pca_traj_dict['Excite_Max'] = np.max(tf_pca.u[:, 0:n_dims], axis=0).tolist()
+
     return info_retained, num_dims_retained, pca_traj_dict
 
 
 def usage():
-    print("Usage: pca.py [-b | --basis] \n"
+    print("Usage: pca.py [-a | --activ_stat] \n"
+          "              [-b | --basis] \n"
           "              [-d | --dims] <no. of dims>/'all' \n"
           "              [-e | --eulerangle] \n"
           "              [-f | --fixed] \n"
@@ -520,6 +527,7 @@ def main(argv):
     sigma_matrix = False
     v_matrix = False
     inverse = False
+    activ_stat = False
     eulerangle = False
     normalise = False
     fixed_root_pos = False
@@ -535,10 +543,10 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"hprbuzviaenfsgm:k:d:t:",
-            ["help", "pca", "reproj", "basis", "U", "Sigma", "V", "inv",
-             "eulerangle", "normalise", "fixed", "single", "graph", "mfile=",
-             "keep=", "dims=", "tol="])
+        opts, args = getopt.getopt(argv,"haprbuzviaenfsgm:k:d:t:",
+            ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
+             "V", "inv", "eulerangle", "normalise", "fixed", "single", "graph",
+             "mfile=", "keep=", "dims=", "tol="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -547,6 +555,8 @@ def main(argv):
        if opt in ("-h", "--help"):
            usage()
            sys.exit()
+       elif opt in ("-a", "--activ_stat"):
+           activ_stat = True
        elif opt in ("-p", "--pca"):
            pca = True
        elif opt in ("-r", "--reproj"):
@@ -630,7 +640,7 @@ def main(argv):
                     v_matrix=v_matrix, inverse=inverse, eulerangle=eulerangle,
                     fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
                     normalise=normalise, single_pca=single_pca, graph=graph,
-                    orth_tol=orth_tol)
+                    activ_stat=activ_stat, orth_tol=orth_tol)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
@@ -652,6 +662,10 @@ def main(argv):
 
     if eulerangle and not normalise:
         print("WARNING: Data Not Normalised!")
+
+    if not activ_stat:
+        print("WARNING: Activation Stats Not Saved!")
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
