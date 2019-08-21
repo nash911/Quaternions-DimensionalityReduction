@@ -230,8 +230,8 @@ def decompose_euler_trajectories(motion_data):
     quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
     quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
 
-    quat_trajs['chest_rotation'] = np.array(motion_data[:,8:11]) # Quaternion
-    quat_trajs['neck_rotation'] = np.array(motion_data[:,11:14]) # Quaternion
+    quat_trajs['chest_rotation'] = np.array(motion_data[:,8:11]) # EulerAngle
+    quat_trajs['neck_rotation'] = np.array(motion_data[:,11:14]) # EulerAngle
 
     quat_trajs['right_hip_rotation'] = np.array(motion_data[:,14:17]) # EulerAngle
     quat_trajs['right_knee_rotation'] = np.array(motion_data[:,17:18]) # 1D Joint
@@ -413,7 +413,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                                                   fixed_root_pos=fixed_root_pos,
                                                   fixed_root_rot=fixed_root_rot)
         # Remove non-controlable DOFs from reprojected trajectories, if exists
-        reproj_traj = reproj_traj[:, -36:reproj_traj.shape[1]]
+        reproj_traj = reproj_traj[:, (-28 if eulerangle else -36):reproj_traj.shape[1]]
         pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
                                               reproj_traj)).tolist()
 
@@ -597,6 +597,9 @@ def main(argv):
     if keep_info is None and n_dims is None:
         keep_info = 0.9
 
+    if eulerangle and n_dims == 36:
+        n_dims = 28
+
     with open(motion_file) as f:
         motion_file_dict = json.load(f)
 
@@ -660,12 +663,23 @@ def main(argv):
     with open('pca_traj.txt', 'w') as fp:
         json.dump(pca_traj_dict, fp, indent=4)
 
+    if not eulerangle:
+        print("WARNING: PCA Not in Euler Angle! Use flag: [-e | --eulerangle]")
+
     if eulerangle and not normalise:
-        print("WARNING: Data Not Normalised!")
+        print("WARNING: Data Not Normalised! Use flag: [-n | --normalise]")
 
     if not activ_stat:
-        print("WARNING: Activation Stats Not Saved!")
+        print("WARNING: Activation Stats Not Saved! Use flag: [-a | --activ_stat]")
 
+    if not u_matrix:
+        print("WARNING: U Not Saved! Use flag: [-u | --U]")
+
+    if not sigma_matrix:
+        print("WARNING: Sigma Not Saved! Use flag: [-z | --Sigma]")
+
+    if not inverse:
+        print("WARNING: Inverse Not Saved! Use flag: [-i | --inv]")
 
 if __name__ == "__main__":
     main(sys.argv[1:])
