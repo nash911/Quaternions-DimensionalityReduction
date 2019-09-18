@@ -669,9 +669,6 @@ def main(argv):
     if eulerangle and not normalise:
         print("WARNING: Data Not Normalised! Use flag: [-n | --normalise]")
 
-    if not activ_stat:
-        print("WARNING: Activation Stats Not Saved! Use flag: [-a | --activ_stat]")
-
     if not u_matrix:
         print("WARNING: U Not Saved! Use flag: [-u | --U]")
 
