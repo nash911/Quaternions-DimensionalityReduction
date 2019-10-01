@@ -391,7 +391,8 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
                 sigma_matrix=False, v_matrix=False, inverse=False, eulerangle=False,
                 fixed_root_pos=False, fixed_root_rot=False, normalise=False,
-                single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06):
+                single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
+                recon_error=False, error_file=None):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -416,6 +417,17 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         reproj_traj = reproj_traj[:, (-28 if eulerangle else -36):reproj_traj.shape[1]]
         pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
                                               reproj_traj)).tolist()
+
+        if recon_error:
+            original_traj = tf_pca.data
+            error = math.degrees(np.mean(np.square(original_traj - reproj_traj)))
+
+            with open(error_file, 'a') as ef:
+                dim_error = str(num_dims_retained) + " " + str(error) + "\n"
+                ef.write(dim_error)
+                ef.close()
+
+            print("Dim:", num_dims_retained, "  - Reconstruction Error: ", error)
 
         # if axisangle:
         #     # Convert back to Quaternions
@@ -501,6 +513,7 @@ def usage():
           "              [-b | --basis] \n"
           "              [-d | --dims] <no. of dims>/'all' \n"
           "              [-e | --eulerangle] \n"
+          "              [-E | --recon_error] \n"
           "              [-f | --fixed] \n"
           "              [-g | --graph] \n"
           "              [-h | --help] \n"
@@ -535,6 +548,7 @@ def main(argv):
     single_pca = False
     graph = False
     orth_tol = 1e-06
+    recon_error = False
 
     keep_info = None
     n_dims = None
@@ -543,10 +557,10 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"haprbuzviaenfsgm:k:d:t:",
+        opts, args = getopt.getopt(argv,"haprbuzviaeEnfsgm:k:d:t:",
             ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
-             "V", "inv", "eulerangle", "normalise", "fixed", "single", "graph",
-             "mfile=", "keep=", "dims=", "tol="])
+             "V", "inv", "eulerangle", "recon_error", "normalise", "fixed",
+             "single", "graph", "mfile=", "keep=", "dims=", "tol="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -573,6 +587,8 @@ def main(argv):
            inverse = True
        elif opt in ("-e", "--eulerangle"):
            eulerangle = True
+       elif opt in ("-E", "--recon_error"):
+           recon_error = True
        elif opt in ("-n", "--normalise"):
            normalise = True
        elif opt in ("-m", "--mfile"):
@@ -617,36 +633,67 @@ def main(argv):
         norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict,
                                                           key_list)
     ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
-                                                key_list, include=False)
+                                               key_list, include=False)
 
-    # Create a TF PCA object
-    tf_pca = TF_PCA(ref_traj_matrix)
+    if recon_error:
+        error_file = motion_file.split("humanoid3d_")[-1]
+        error_file = "recon_error_" + error_file.split(".")[0] + '.dat'
+        with open(error_file, 'w') as ef:
+            ef.write("#Dimension  #Angle_Error\n")
+            ef.close()
 
-    # Compute U, ∑ and V
-    tf_pca.fit(normalise)
+        for n_dim in range(1, n_dims+1):
+            # Create a TF PCA object
+            tf_pca = TF_PCA(ref_traj_matrix)
 
-    # Create a clone of the input file dictionary
-    pca_traj_dict = motion_file_dict.copy()
+            # Compute U, ∑ and V
+            tf_pca.fit(normalise)
 
-    # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
-    if eulerangle:
-        pca_traj_dict['Domain'] = "Eulerangle"
+            # Create a clone of the input file dictionary
+            pca_traj_dict = motion_file_dict.copy()
+
+            # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
+            if eulerangle:
+                pca_traj_dict['Domain'] = "Eulerangle"
+            else:
+                pca_traj_dict['Domain'] = "Quaternion"
+
+            key_list = ['frame_duration', 'root_position', 'root_rotation']
+
+            info_retained, num_dims_retained, pca_traj_dict = \
+                pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list,
+                            n_dims=n_dim, keep_info=keep_info, pca=False, reproj=True,
+                            basis=False, eulerangle=eulerangle, normalise=normalise,
+                            orth_tol=orth_tol, recon_error=True, error_file=error_file)
     else:
-        pca_traj_dict['Domain'] = "Quaternion"
+        # Create a TF PCA object
+        tf_pca = TF_PCA(ref_traj_matrix)
 
-    key_list = ['frame_duration', 'root_position', 'root_rotation']
+        # Compute U, ∑ and V
+        tf_pca.fit(normalise)
 
-    info_retained, num_dims_retained, pca_traj_dict = \
-        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list,
-                    n_dims=n_dims, keep_info=keep_info, pca=pca, reproj=reproj,
-                    basis=basis, u_matrix=u_matrix, sigma_matrix=sigma_matrix,
-                    v_matrix=v_matrix, inverse=inverse, eulerangle=eulerangle,
-                    fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
-                    normalise=normalise, single_pca=single_pca, graph=graph,
-                    activ_stat=activ_stat, orth_tol=orth_tol)
+        # Create a clone of the input file dictionary
+        pca_traj_dict = motion_file_dict.copy()
 
-    print("No. of dimensions: ", num_dims_retained)
-    print("Keept info: ", info_retained)
+        # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
+        if eulerangle:
+            pca_traj_dict['Domain'] = "Eulerangle"
+        else:
+            pca_traj_dict['Domain'] = "Quaternion"
+
+        key_list = ['frame_duration', 'root_position', 'root_rotation']
+
+        info_retained, num_dims_retained, pca_traj_dict = \
+            pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list,
+                        n_dims=n_dims, keep_info=keep_info, pca=pca, reproj=reproj,
+                        basis=basis, u_matrix=u_matrix, sigma_matrix=sigma_matrix,
+                        v_matrix=v_matrix, inverse=inverse, eulerangle=eulerangle,
+                        fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
+                        normalise=normalise, single_pca=single_pca, graph=graph,
+                        activ_stat=activ_stat, orth_tol=orth_tol, recon_error=False)
+
+        print("No. of dimensions: ", num_dims_retained)
+        print("Keept info: ", info_retained)
 
     # Create output path and file
     output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
