@@ -245,28 +245,28 @@ def decompose_quat_trajectories(motion_data):
 
 def decompose_euler_trajectories(motion_data):
     # Decomposes trajectories into individual joints (by name)
-    quat_trajs = OrderedDict()
+    euler_trajs = OrderedDict()
 
-    quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
-    quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
-    quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
+    euler_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
+    euler_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
+    euler_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
 
-    quat_trajs['chest_rotation'] = np.array(motion_data[:,8:11]) # EulerAngle
-    quat_trajs['neck_rotation'] = np.array(motion_data[:,11:14]) # EulerAngle
+    euler_trajs['chest_rotation'] = np.array(motion_data[:,8:11]) # EulerAngle
+    euler_trajs['neck_rotation'] = np.array(motion_data[:,11:14]) # EulerAngle
 
-    quat_trajs['right_hip_rotation'] = np.array(motion_data[:,14:17]) # EulerAngle
-    quat_trajs['right_knee_rotation'] = np.array(motion_data[:,17:18]) # 1D Joint
-    quat_trajs['right_ankle_rotation'] = np.array(motion_data[:,18:21]) # EulerAngle
-    quat_trajs['right_shoulder_rotation'] = np.array(motion_data[:,21:24]) # EulerAngle
-    quat_trajs['right_elbow_rotation'] = np.array(motion_data[:,24:25]) # 1D Joint
+    euler_trajs['right_hip_rotation'] = np.array(motion_data[:,14:17]) # EulerAngle
+    euler_trajs['right_knee_rotation'] = np.array(motion_data[:,17:18]) # 1D Joint
+    euler_trajs['right_ankle_rotation'] = np.array(motion_data[:,18:21]) # EulerAngle
+    euler_trajs['right_shoulder_rotation'] = np.array(motion_data[:,21:24]) # EulerAngle
+    euler_trajs['right_elbow_rotation'] = np.array(motion_data[:,24:25]) # 1D Joint
 
-    quat_trajs['left_hip_rotation'] = np.array(motion_data[:,25:28]) # EulerAngle
-    quat_trajs['left_knee_rotation'] = np.array(motion_data[:,28:29]) # 1D Joint
-    quat_trajs['left_ankle_rotation'] = np.array(motion_data[:,29:32]) # EulerAngle
-    quat_trajs['left_shoulder_rotation'] = np.array(motion_data[:,32:35]) # EulerAngle
-    quat_trajs['left_elbow_rotation'] = np.array(motion_data[:,35:36]) # 1D Joint
+    euler_trajs['left_hip_rotation'] = np.array(motion_data[:,25:28]) # EulerAngle
+    euler_trajs['left_knee_rotation'] = np.array(motion_data[:,28:29]) # 1D Joint
+    euler_trajs['left_ankle_rotation'] = np.array(motion_data[:,29:32]) # EulerAngle
+    euler_trajs['left_shoulder_rotation'] = np.array(motion_data[:,32:35]) # EulerAngle
+    euler_trajs['left_elbow_rotation'] = np.array(motion_data[:,35:36]) # 1D Joint
 
-    return quat_trajs
+    return euler_trajs
 
 def normalise_quaternions(quat_dict):
     norm_quat_dict = OrderedDict()
