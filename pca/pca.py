@@ -98,7 +98,9 @@ class TF_PCA:
             return keep_info, n_dims, session.run(pca)
 
 
-    def reproject(self, n_dims=None, keep_info=None, single_pca=False):
+    def reproject(self, n_dims=None, keep_info=None, sine=False, single_pca=False,
+                  cycle_dur=1.0, frame_dur=0.03, sine_amp=[1.0], sine_freq=[1.0],
+                  sine_period=1.0, sine_offset=[0]):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
         total_dims = self.data.shape[1]
 
@@ -112,7 +114,12 @@ class TF_PCA:
                 # Cut out the relevant part from ∑, U and V
                 sigma = tf.slice(self.sigma, [start_idx, start_idx],
                                  [1, 1])
-                u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], 1])
+                if sine:
+                    u = self.sine_fn(cycle_dur=cycle_dur, frame_dur=frame_dur,
+                                     amp=sine_amp, freq=sine_freq, period=sine_period,
+                                     offset=sine_offset)
+                else:
+                    u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], 1])
                 v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], 1])
             else:
                 if n_dims >= 0:
@@ -122,7 +129,12 @@ class TF_PCA:
                 # Cut out the relevant part from ∑, U and V
                 sigma = tf.slice(self.sigma, [start_idx, start_idx],
                                  [abs(n_dims), abs(n_dims)])
-                u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
+                if sine:
+                    u = self.sine_fn(cycle_dur=cycle_dur, frame_dur=frame_dur,
+                                     amp=sine_amp, freq=sine_freq, period=sine_period,
+                                     offset=sine_offset)
+                else:
+                    u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
                 v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
 
             # Reproject on to linear subspace spanned by Principle Components
@@ -163,6 +175,15 @@ class TF_PCA:
         if os.path.exists('U.dat'):
             os.remove('U.dat')
         np.savetxt('U.dat', self.u, delimiter=',')
+
+    def sine_fn(self, cycle_dur=1.0, frame_dur=0.03, period=1.0, amp=[1.0],
+                freq=[1.0], offset=[0]):
+        print("cycle_dur:", cycle_dur)
+        print("frame_dur:", frame_dur)
+        t = np.expand_dims(np.arange(0, cycle_dur, frame_dur), axis=-1)
+        angular_freq = 2.0 * np.pi * (np.array(freq)/period)
+        sine_wave = (np.array(amp) * np.sin(angular_freq*t)) + np.array(offset)
+        return np.array(sine_wave, dtype=np.float32)
 
 
 def plot(data):
@@ -391,7 +412,9 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
                 sigma_matrix=False, v_matrix=False, inverse=False, eulerangle=False,
                 fixed_root_pos=False, fixed_root_rot=False, normalise=False,
-                single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06):
+                single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
+                sine=False, cycle_dur=1.0, frame_dur=0.03, sine_amp=[1.0],
+                sine_freq=[1.0], sine_period=1.0, sine_offset=[0]):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -403,8 +426,11 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
     if reproj:
         # Reproject the trajectories on to a linear sub-space in the full space: U ∑ V^T
         info_retained, num_dims_retained, reproj_traj = \
-            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims,
-                             single_pca=single_pca)
+            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims, sine=sine,
+                             single_pca=single_pca, cycle_dur=cycle_dur,
+                             frame_dur=frame_dur, sine_amp=sine_amp,
+                             sine_freq=sine_freq, sine_period=sine_period,
+                             sine_offset=sine_offset)
 
         # Replace original trajectories, in the controlable DOFs, with
         # reprojected trajectories
@@ -498,19 +524,24 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
 
 def usage():
     print("Usage: pca.py [-a | --activ_stat] \n"
+          "              [-A | --sine_amp] <list of sine-excitation amplitudes> \n"
           "              [-b | --basis] \n"
           "              [-d | --dims] <no. of dims>/'all' \n"
           "              [-e | --eulerangle] \n"
           "              [-f | --fixed] \n"
+          "              [-F | --sine_freq] <list of sine-excitation frequencies> \n"
           "              [-g | --graph] \n"
           "              [-h | --help] \n"
           "              [-i | --inv] \n"
           "              [-k | --keep] <% of info. to be retained> \n"
           "              [-m | --mfile] <input motion file> \n"
           "              [-n | --normalise] \n"
+          "              [-O | --sine_offset] <list of sine-excitation offsets> \n"
           "              [-p | --pca] \n"
+          "              [-P | --sine_period] <sine-excitation period> \n"
           "              [-r | --reproj] \n"
           "              [-s | --single] \n"
+          "              [-S | --sine] \n"
           "              [-t | --tol] <orthogonal tolerance> \n"
           "              [-u | --U] \n"
           "              [-v | --V] \n"
@@ -535,6 +566,11 @@ def main(argv):
     single_pca = False
     graph = False
     orth_tol = 1e-06
+    sine = False
+    sine_amp = [1.0]
+    sine_freq = [1.0]
+    sine_period = None
+    sine_offset = [0]
 
     keep_info = None
     n_dims = None
@@ -543,10 +579,11 @@ def main(argv):
     num_dims_retained = None
 
     try:
-        opts, args = getopt.getopt(argv,"haprbuzviaenfsgm:k:d:t:",
+        opts, args = getopt.getopt(argv,"haprbuzviaenfsgSm:k:d:t:A:F:P:O:",
             ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
              "V", "inv", "eulerangle", "normalise", "fixed", "single", "graph",
-             "mfile=", "keep=", "dims=", "tol="])
+             "sine", "mfile=", "keep=", "dims=", "tol=", "sine_amp=", "sine_period=",
+             "sine_freq=", "sine_offset="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -593,12 +630,28 @@ def main(argv):
            graph = True
        elif opt in ("-t", "--tol"):
            orth_tol = float(arg)
+       elif opt in ("-S", "--sine"):
+           sine = True
+       elif opt in ("-A", "--sine_amp"):
+           sine_amp = list(map(float, arg.strip('[]').split(',')))
+       elif opt in ("-F", "--sine_freq"):
+           sine_freq = list(map(float, arg.strip('[]').split(',')))
+       elif opt in ("-P", "--sine_period"):
+           sine_period = float(arg)
+       elif opt in ("-O", "--sine_offset"):
+           sine_offset = list(map(float, arg.strip('[]').split(',')))
 
     if keep_info is None and n_dims is None:
         keep_info = 0.9
 
     if eulerangle and n_dims == 36:
         n_dims = 28
+
+    if sine:
+        if not single_pca:
+            sine_amp = (np.ones(n_dims) * sine_amp[0]).tolist()
+            sine_freq = (np.ones(n_dims) * sine_freq[0]).tolist()
+            sine_offset = (np.ones(n_dims) * sine_offset[0]).tolist()
 
     with open(motion_file) as f:
         motion_file_dict = json.load(f)
@@ -618,6 +671,11 @@ def main(argv):
                                                           key_list)
     ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
                                                 key_list, include=False)
+
+    frame_dur = quat_trajectory_dict['frame_duration'][0]
+    cycle_dur = motion_data.shape[0] * frame_dur
+    if sine_period is None:
+        sine_period = cycle_dur
 
     # Create a TF PCA object
     tf_pca = TF_PCA(ref_traj_matrix)
@@ -643,7 +701,9 @@ def main(argv):
                     v_matrix=v_matrix, inverse=inverse, eulerangle=eulerangle,
                     fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
                     normalise=normalise, single_pca=single_pca, graph=graph,
-                    activ_stat=activ_stat, orth_tol=orth_tol)
+                    activ_stat=activ_stat, orth_tol=orth_tol, sine=sine,
+                    sine_amp=sine_amp, sine_freq=sine_freq, sine_period=sine_period,
+                    sine_offset=sine_offset, cycle_dur=cycle_dur, frame_dur=frame_dur)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
