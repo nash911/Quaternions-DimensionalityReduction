@@ -178,8 +178,6 @@ class TF_PCA:
 
     def sine_fn(self, cycle_dur=1.0, frame_dur=0.03, period=1.0, amp=[1.0],
                 freq=[1.0], offset=[0]):
-        print("cycle_dur:", cycle_dur)
-        print("frame_dur:", frame_dur)
         t = np.expand_dims(np.arange(0, cycle_dur, frame_dur), axis=-1)
         angular_freq = 2.0 * np.pi * (np.array(freq)/period)
         sine_wave = (np.array(amp) * np.sin(angular_freq*t)) + np.array(offset)
@@ -407,6 +405,18 @@ def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06):
 
     return orthogonal
 
+def convert_to_json(pose_file):
+    with open(pose_file, 'r') as pf:
+        pose_arr = np.loadtxt(pf)
+
+    motion_file_dict = OrderedDict()
+    motion_file_dict['Loop'] = 'wrap'
+    motion_file_dict['Frames'] = pose_arr.tolist()
+
+    with open(pose_file, 'w') as jf:
+        json.dump(motion_file_dict, jf, indent=4)
+
+    return motion_file_dict
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
@@ -653,10 +663,15 @@ def main(argv):
             sine_freq = (np.ones(n_dims) * sine_freq[0]).tolist()
             sine_offset = (np.ones(n_dims) * sine_offset[0]).tolist()
 
-    with open(motion_file) as f:
-        motion_file_dict = json.load(f)
+    try:
+        with open(motion_file) as f:
+            motion_file_dict = json.load(f)
+    except:
+        motion_file_dict = convert_to_json(motion_file)
 
     motion_data = np.array(motion_file_dict['Frames'])
+
+    print("Frames count: ", motion_data.shape[0])
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
