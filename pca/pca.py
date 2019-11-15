@@ -7,6 +7,7 @@ from collections import OrderedDict
 import sys, getopt
 import json
 import os
+import glob
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -99,8 +100,8 @@ class TF_PCA:
 
 
     def reproject(self, n_dims=None, keep_info=None, sine=False, single_pca=False,
-                  cycle_dur=1.0, frame_dur=0.03, sine_amp=[1.0], sine_freq=[1.0],
-                  sine_period=1.0, sine_offset=[0]):
+                  frame_dur=0.03, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
+                  sine_offset=[0]):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
         total_dims = self.data.shape[1]
 
@@ -115,9 +116,8 @@ class TF_PCA:
                 sigma = tf.slice(self.sigma, [start_idx, start_idx],
                                  [1, 1])
                 if sine:
-                    u = self.sine_fn(cycle_dur=cycle_dur, frame_dur=frame_dur,
-                                     amp=sine_amp, freq=sine_freq, period=sine_period,
-                                     offset=sine_offset)
+                    u = self.sine_fn(frame_dur=frame_dur, amp=sine_amp, freq=sine_freq,
+                                     period=sine_period, offset=sine_offset)
                 else:
                     u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], 1])
                 v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], 1])
@@ -130,9 +130,8 @@ class TF_PCA:
                 sigma = tf.slice(self.sigma, [start_idx, start_idx],
                                  [abs(n_dims), abs(n_dims)])
                 if sine:
-                    u = self.sine_fn(cycle_dur=cycle_dur, frame_dur=frame_dur,
-                                     amp=sine_amp, freq=sine_freq, period=sine_period,
-                                     offset=sine_offset)
+                    u = self.sine_fn(frame_dur=frame_dur, amp=sine_amp, freq=sine_freq,
+                                     period=sine_period, offset=sine_offset)
                 else:
                     u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
                 v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
@@ -176,9 +175,8 @@ class TF_PCA:
             os.remove('U.dat')
         np.savetxt('U.dat', self.u, delimiter=',')
 
-    def sine_fn(self, cycle_dur=1.0, frame_dur=0.03, period=1.0, amp=[1.0],
-                freq=[1.0], offset=[0]):
-        t = np.expand_dims(np.arange(0, cycle_dur, frame_dur), axis=-1)
+    def sine_fn(self, frame_dur=0.03, period=1.0, amp=[1.0], freq=[1.0], offset=[0]):
+        t = np.expand_dims(np.arange(0, period, frame_dur), axis=-1)
         angular_freq = 2.0 * np.pi * (np.array(freq)/period)
         sine_wave = (np.array(amp) * np.sin(angular_freq*t)) + np.array(offset)
         return np.array(sine_wave, dtype=np.float32)
@@ -205,7 +203,8 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
         if include:
             if k in key_list:
                 if k == 'root_position' and fixed_root_pos:
-                    v = (np.ones_like(v) * v[0]).tolist()
+                    #v = (np.ones_like(v) * v[0]).tolist()
+                    v = (np.ones_like(v) * 1.0).tolist()
                 if k == 'root_rotation' and fixed_root_rot:
                     v = (np.zeros_like(v) + np.array([1, 0, 0, 0])).tolist()
                 trajs_data.append(v)
@@ -409,22 +408,22 @@ def convert_to_json(pose_file):
     with open(pose_file, 'r') as pf:
         pose_arr = np.loadtxt(pf)
 
-    motion_file_dict = OrderedDict()
-    motion_file_dict['Loop'] = 'wrap'
-    motion_file_dict['Frames'] = pose_arr.tolist()
+    motion_dict = OrderedDict()
+    motion_dict['Loop'] = 'wrap'
+    motion_dict['Frames'] = pose_arr.tolist()
 
     with open(pose_file, 'w') as jf:
-        json.dump(motion_file_dict, jf, indent=4)
+        json.dump(motion_dict, jf, indent=4)
 
-    return motion_file_dict
+    return motion_dict
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
                 sigma_matrix=False, v_matrix=False, inverse=False, eulerangle=False,
                 fixed_root_pos=False, fixed_root_rot=False, normalise=False,
                 single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
-                sine=False, cycle_dur=1.0, frame_dur=0.03, sine_amp=[1.0],
-                sine_freq=[1.0], sine_period=1.0, sine_offset=[0]):
+                sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0],
+                sine_period=1.0, sine_offset=[0]):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -437,10 +436,9 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         # Reproject the trajectories on to a linear sub-space in the full space: U ∑ V^T
         info_retained, num_dims_retained, reproj_traj = \
             tf_pca.reproject(keep_info=keep_info, n_dims=n_dims, sine=sine,
-                             single_pca=single_pca, cycle_dur=cycle_dur,
-                             frame_dur=frame_dur, sine_amp=sine_amp,
-                             sine_freq=sine_freq, sine_period=sine_period,
-                             sine_offset=sine_offset)
+                             single_pca=single_pca,frame_dur=frame_dur,
+                             sine_amp=sine_amp, sine_freq=sine_freq,
+                             sine_period=sine_period, sine_offset=sine_offset)
 
         # Replace original trajectories, in the controlable DOFs, with
         # reprojected trajectories
@@ -448,6 +446,17 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                                                   include=True,
                                                   fixed_root_pos=fixed_root_pos,
                                                   fixed_root_rot=fixed_root_rot)
+
+        m = reproj_traj.shape[0]
+        if m != unchanged_traj.shape[0]:
+            if fixed_root_pos and fixed_root_rot:
+                fixed_dur_root = np.array([frame_dur] + [1, 1, 1] + [1, 0, 0, 0])
+                unchanged_traj = np.ones((m, 8), dtype=reproj_traj.dtype) * fixed_dur_root
+            else:
+                print("Error: Number of frames in the reprojected trajectories: %d != %d"
+                      "(number of frames in input file)" % (m, unchanged_traj.shape[0]))
+                print("       Use flag: [-f | --fixed], to fix root-position and rotation\n")
+                sys.exit()
         # Remove non-controlable DOFs from reprojected trajectories, if exists
         reproj_traj = reproj_traj[:, (-28 if eulerangle else -36):reproj_traj.shape[1]]
         pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
@@ -473,8 +482,8 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca)
 
         if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol):
-            if os.path.exists('pca_traj.txt'):
-                os.remove('pca_traj.txt')
+            if os.path.exists('Output/pca_traj.txt'):
+                os.remove('Output/pca_traj.txt')
             print("Error: Basis Vectors not Orthogonal!")
             sys.exit()
 
@@ -537,6 +546,7 @@ def usage():
           "              [-A | --sine_amp] <list of sine-excitation amplitudes> \n"
           "              [-b | --basis] \n"
           "              [-d | --dims] <no. of dims>/'all' \n"
+          "              [-D | --frame_duration] <frame duration in seconds>/'all' \n"
           "              [-e | --eulerangle] \n"
           "              [-f | --fixed] \n"
           "              [-F | --sine_freq] <list of sine-excitation frequencies> \n"
@@ -544,11 +554,11 @@ def usage():
           "              [-h | --help] \n"
           "              [-i | --inv] \n"
           "              [-k | --keep] <% of info. to be retained> \n"
-          "              [-m | --mfile] <input motion file> \n"
+          "              [-m | --mfile] <input motion file(s) or directory> \n"
           "              [-n | --normalise] \n"
           "              [-O | --sine_offset] <list of sine-excitation offsets> \n"
           "              [-p | --pca] \n"
-          "              [-P | --sine_period] <sine-excitation period> \n"
+          "              [-P | --sine_period] <sine-excitation period (in seconds)> \n"
           "              [-r | --reproj] \n"
           "              [-s | --single] \n"
           "              [-S | --sine] \n"
@@ -560,7 +570,7 @@ def usage():
 
 
 def main(argv):
-    motion_file = None
+    motion_files = list()
     pca = False
     reproj = False
     basis = False
@@ -581,6 +591,7 @@ def main(argv):
     sine_freq = [1.0]
     sine_period = None
     sine_offset = [0]
+    frame_dur = None
 
     keep_info = None
     n_dims = None
@@ -588,12 +599,15 @@ def main(argv):
     info_retained = None
     num_dims_retained = None
 
+    duration_warning = False
+    sine_period_warning = False
+
     try:
-        opts, args = getopt.getopt(argv,"haprbuzviaenfsgSm:k:d:t:A:F:P:O:",
+        opts, args = getopt.getopt(argv,"haprbuzviaenfsgSm:k:d:t:A:F:P:O:D:",
             ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
              "V", "inv", "eulerangle", "normalise", "fixed", "single", "graph",
              "sine", "mfile=", "keep=", "dims=", "tol=", "sine_amp=", "sine_period=",
-             "sine_freq=", "sine_offset="])
+             "sine_freq=", "sine_offset=", "frame_duration="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -623,7 +637,7 @@ def main(argv):
        elif opt in ("-n", "--normalise"):
            normalise = True
        elif opt in ("-m", "--mfile"):
-           motion_file = arg
+           motion_files.append(arg)
        elif opt in ("-k", "--keep"):
            keep_info = float(arg)
        elif opt in ("-d", "--dims"):
@@ -650,6 +664,8 @@ def main(argv):
            sine_period = float(arg)
        elif opt in ("-O", "--sine_offset"):
            sine_offset = list(map(float, arg.strip('[]').split(',')))
+       elif opt in ("-D", "--frame_duration"):
+           frame_dur = float(arg)
 
     if keep_info is None and n_dims is None:
         keep_info = 0.9
@@ -663,13 +679,24 @@ def main(argv):
             sine_freq = (np.ones(n_dims) * sine_freq[0]).tolist()
             sine_offset = (np.ones(n_dims) * sine_offset[0]).tolist()
 
-    try:
-        with open(motion_file) as f:
-            motion_file_dict = json.load(f)
-    except:
-        motion_file_dict = convert_to_json(motion_file)
+    if os.path.isdir(motion_files[0]):
+        motion_files = glob.glob(motion_files[0] + "humanoid3d_*.txt")
+        motion_files.sort()
 
-    motion_data = np.array(motion_file_dict['Frames'])
+    motion_data = list()
+    motion_dict_list = list()
+    for m_file in motion_files:
+        try:
+            with open(m_file) as mf:
+                motion_dict = json.load(mf)
+        except:
+            motion_dict = convert_to_json(m_file)
+        motion_data.append(np.array(motion_dict['Frames']))
+        motion_dict_list.append(motion_dict)
+    motion_data = np.vstack(motion_data)
+
+    # Random shuffle data-points (Won't make sense to shuffle when root NOT fixed)
+    # np.random.shuffle(motion_data)
 
     print("Frames count: ", motion_data.shape[0])
 
@@ -687,10 +714,18 @@ def main(argv):
     ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
                                                 key_list, include=False)
 
-    frame_dur = quat_trajectory_dict['frame_duration'][0]
-    cycle_dur = motion_data.shape[0] * frame_dur
-    if sine_period is None:
-        sine_period = cycle_dur
+    if frame_dur is None:
+        durations = np.squeeze(quat_trajectory_dict['frame_duration'].tolist())
+        if all(elem in [durations[0], 0.0] for elem in durations):
+            frame_dur = durations[0]
+            if sine_period is None:
+                sine_period = motion_data.shape[0] * frame_dur
+        else:
+            duration_warning = True
+            frame_dur = 1.0/30.0
+            if sine_period is None:
+                sine_period_warning = True
+                sine_period = 1.0
 
     # Create a TF PCA object
     tf_pca = TF_PCA(ref_traj_matrix)
@@ -698,8 +733,9 @@ def main(argv):
     # Compute U, ∑ and V
     tf_pca.fit(normalise)
 
-    # Create a clone of the input file dictionary
-    pca_traj_dict = motion_file_dict.copy()
+    # Create a new reduced-motion-dictionary
+    pca_traj_dict = OrderedDict()
+    pca_traj_dict["Loop"] = "wrap"
 
     # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
     if eulerangle:
@@ -718,15 +754,21 @@ def main(argv):
                     normalise=normalise, single_pca=single_pca, graph=graph,
                     activ_stat=activ_stat, orth_tol=orth_tol, sine=sine,
                     sine_amp=sine_amp, sine_freq=sine_freq, sine_period=sine_period,
-                    sine_offset=sine_offset, cycle_dur=cycle_dur, frame_dur=frame_dur)
+                    sine_offset=sine_offset, frame_dur=frame_dur)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
 
     # Create output path and file
     output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
-    output_file = motion_file.split("/")[-1]
-    output_file = output_file.split(".")[0]
+    output_file = 'humanoid3d_'
+    for m_file in motion_files:
+        motion_name = m_file.split("/")[-1]
+        motion_name = motion_name.split(".")[0]
+        motion_name = motion_name.split("humanoid3d_")[-1]
+        output_file += motion_name + '-'
+    # Removing the last '-'
+    output_file = output_file[:-1]
     domain = "euler_" if eulerangle else "quat_"
     output_file = output_file_path + domain + output_file + "_" + \
                   str(info_retained) + "_" + str(num_dims_retained) + ".txt"
@@ -735,7 +777,7 @@ def main(argv):
     with open(output_file, 'w') as fp:
         json.dump(pca_traj_dict, fp, indent=4)
 
-    with open('pca_traj.txt', 'w') as fp:
+    with open('Output/pca_traj.txt', 'w') as fp:
         json.dump(pca_traj_dict, fp, indent=4)
 
     if not eulerangle:
@@ -752,6 +794,14 @@ def main(argv):
 
     if not inverse:
         print("WARNING: Inverse Not Saved! Use flag: [-i | --inv]")
+
+    if duration_warning:
+        print("WARNING: Multiple frame durations found in input-file!\n",
+              "        Setting frame_duration to default value 0.03333.\n",
+              "        Use flag: [-D | --frame_duration] to set a different value.\n")
+
+    if sine_period_warning:
+        print("WARNING: Sine-Period undefined! Use flag: [-P | --sine_period]\n")
 
 if __name__ == "__main__":
     main(sys.argv[1:])
