@@ -571,6 +571,7 @@ def usage():
 
 def main(argv):
     motion_files = list()
+    all_motions = False
     pca = False
     reproj = False
     basis = False
@@ -680,6 +681,7 @@ def main(argv):
             sine_offset = (np.ones(n_dims) * sine_offset[0]).tolist()
 
     if os.path.isdir(motion_files[0]):
+        all_motions = True
         motion_files = glob.glob(motion_files[0] + "humanoid3d_*.txt")
         motion_files.sort()
 
@@ -743,6 +745,17 @@ def main(argv):
     else:
         pca_traj_dict['Domain'] = "Quaternion"
 
+    if all_motions:
+        pca_traj_dict['all_motions'] = "True"
+    else:
+        pca_traj_dict['all_motions'] = "False"
+
+    pca_traj_dict['mirrored_motion'] = "False"
+    for mFile in motion_files:
+        if 'mirrored' in mFile:
+            pca_traj_dict['mirrored_motion'] = "True"
+            break
+
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     info_retained, num_dims_retained, pca_traj_dict = \
@@ -762,13 +775,20 @@ def main(argv):
     # Create output path and file
     output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
     output_file = 'humanoid3d_'
-    for m_file in motion_files:
-        motion_name = m_file.split("/")[-1]
-        motion_name = motion_name.split(".")[0]
-        motion_name = motion_name.split("humanoid3d_")[-1]
-        output_file += motion_name + '-'
-    # Removing the last '-'
-    output_file = output_file[:-1]
+    if all_motions:
+        output_file += 'all-motions_'
+        if pca_traj_dict['mirrored_motion'] == "True":
+            output_file += 'mirrored'
+    else:
+        for m_file in motion_files:
+            motion_name = m_file.split("/")[-1]
+            motion_name = motion_name.split(".")[0]
+            motion_name = motion_name.split("humanoid3d_")[-1]
+            motion_name = motion_name.split("mirrored_")[-1]
+            if not motion_name in output_file:
+                output_file += motion_name + '-'
+        # Removing the last '-'
+        output_file = output_file[:-1]
     domain = "euler_" if eulerangle else "quat_"
     output_file = output_file_path + domain + output_file + "_" + \
                   str(info_retained) + "_" + str(num_dims_retained) + ".txt"
