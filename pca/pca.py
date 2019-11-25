@@ -101,7 +101,7 @@ class TF_PCA:
 
     def reproject(self, n_dims=None, keep_info=None, sine=False, single_pca=False,
                   frame_dur=0.03, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
-                  sine_offset=[0]):
+                  sine_offset=[0], normal_basis=False):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
         total_dims = self.data.shape[1]
 
@@ -137,7 +137,10 @@ class TF_PCA:
                 v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
 
             # Reproject on to linear subspace spanned by Principle Components
-            reproj = tf.matmul(u, tf.matmul(sigma, v, transpose_b=True)) + self.X_mean
+            if normal_basis:
+                reproj = tf.matmul(u, v, transpose_b=True) + self.X_mean
+            else:
+                reproj = tf.matmul(u, tf.matmul(sigma, v, transpose_b=True)) + self.X_mean
 
         with tf.Session(graph=self.graph) as session:
             return keep_info, n_dims, session.run(reproj)
@@ -391,23 +394,23 @@ def convert_euler_to_quat(euler_dict, key_list):
     return quat_dict
 
 
-def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06):
+def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06, normal_basis=False):
     num_vecs = c_vecs.shape[0]
     vec_list = [c_vecs[i, :] for i in range(num_vecs)]
-
     orthogonal = True
 
     mat_mul = np.matmul(c_vecs, c_vecs.T)
-    if np.allclose(mat_mul, np.eye(abs(n_dims)), rtol=1e-05, atol=1e-05):
-        print("WARNING: Basis vectors are Normal!")
-
-    for i in range(num_vecs):
-        for j in range(i+1, num_vecs):
-            dot_prod = np.matmul(vec_list[i], vec_list[j].T)
-            if dot_prod > orth_tol:
-                print(dot_prod)
-                orthogonal = False
-                break
+    if normal_basis:
+        if not np.allclose(mat_mul, np.eye(abs(n_dims)), rtol=1e-05, atol=1e-05):
+            return False
+    else:
+        for i in range(num_vecs):
+            for j in range(i+1, num_vecs):
+                dot_prod = np.matmul(vec_list[i], vec_list[j].T)
+                if dot_prod > orth_tol:
+                    print(dot_prod)
+                    orthogonal = False
+                    break
 
     return orthogonal
 
@@ -444,8 +447,9 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         info_retained, num_dims_retained, reproj_traj = \
             tf_pca.reproject(keep_info=keep_info, n_dims=n_dims, sine=sine,
                              single_pca=single_pca,frame_dur=frame_dur,
-                             sine_amp=sine_amp, sine_freq=sine_freq,
-                             sine_period=sine_period, sine_offset=sine_offset)
+                             normal_basis=normal_basis, sine_amp=sine_amp,
+                             sine_freq=sine_freq, sine_period=sine_period,
+                             sine_offset=sine_offset)
 
         # Replace original trajectories, in the controlable DOFs, with
         # reprojected trajectories
@@ -489,10 +493,15 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca,
                          normal_basis=normal_basis)
 
-        if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol):
+        if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol,
+                                   normal_basis=normal_basis):
             if os.path.exists('Output/pca_traj.txt'):
                 os.remove('Output/pca_traj.txt')
-            print("Error: Basis Vectors not Orthogonal!")
+
+            if normal_basis:
+                print("Error: Basis Vectors not Orthonormal!")
+            else:
+                print("Error: Basis Vectors not Orthogonal!")
             sys.exit()
 
         pca_traj_dict['Basis'] = basis_v.tolist()
@@ -532,24 +541,15 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         basis_mat_pinv = pinv(basis_mat)
         pca_traj_dict['Basis_Inv'] = basis_mat_pinv.tolist()
 
-        # Check if the pseudo-inverse is consistant
-        if normal_basis:
-            _, _, RHS = tf_pca.reduce(keep_info=keep_info, n_dims=n_dims) # U ∑
-        else:
-            RHS = tf_pca.u[:, 0:n_dims] # U
-
-        np.testing.assert_array_almost_equal(
-            np.matmul((tf_pca.data - tf_pca.X_mean), basis_mat_pinv), RHS, decimal=4)
-
-
-
-        # u = tf_pca.u[:, 0:n_dims]
-        # np.testing.assert_array_almost_equal(np.matmul(tf_pca.data, sigma_v_pinv),
-        #                                      u, decimal=5)
-
-        # if not check_orthogonality(sigma_v_pinv, n_dims=(28 if eulerangle else 36),
-        #                            decimal=1e-06):
-        #     print("Warning: Basis_Inv Vectors not Orthogonal!")
+        # NOTE: The below check does not work when k ≈ N
+        # # Check if the pseudo-inverse is consistant
+        # if normal_basis:
+        #     _, _, RHS = tf_pca.reduce(keep_info=keep_info, n_dims=n_dims) # U ∑
+        # else:
+        #     RHS = tf_pca.u[:, 0:n_dims] # U
+        #
+        # np.testing.assert_array_almost_equal(
+        #     np.matmul((tf_pca.data - tf_pca.X_mean), basis_mat_pinv), RHS, decimal=4)
 
     if normalise and eulerangle:
         X_mean = tf_pca.X_mean
