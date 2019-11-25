@@ -143,13 +143,20 @@ class TF_PCA:
             return keep_info, n_dims, session.run(reproj)
 
 
-    def basis(self, n_dims=None, keep_info=None, single_pca=False):
+    def basis(self, n_dims=None, keep_info=None, single_pca=False,
+              normal_basis=False):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
 
         if n_dims >= 0:
-            b = np.matmul(self.sigma[0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
+            if normal_basis:
+                b = self.v[:, 0:n_dims].T
+            else:
+                b = np.matmul(self.sigma[0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
         else:
-            b = np.matmul(self.sigma[n_dims:, n_dims:], self.v[:, n_dims:].T)
+            if normal_basis:
+                b = self.v[:, n_dims:].T
+            else:
+                b = np.matmul(self.sigma[n_dims:, n_dims:], self.v[:, n_dims:].T)
 
         return keep_info, n_dims, b
 
@@ -423,7 +430,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
                 fixed_root_pos=False, fixed_root_rot=False, normalise=False,
                 single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
                 sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0],
-                sine_period=1.0, sine_offset=[0]):
+                sine_period=1.0, sine_offset=[0], normal_basis=False):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -479,7 +486,8 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
     if basis:
         # Get full-rank basis vectors of the linear sub-space: ∑ V^T
         info_retained, num_dims_retained, basis_v = \
-            tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca)
+            tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca,
+                         normal_basis=normal_basis)
 
         if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol):
             if os.path.exists('Output/pca_traj.txt'):
@@ -508,19 +516,32 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims,
         v_pinv = pinv(tf_pca.v[:, 0:n_dims]).T
         pca_traj_dict['V_Inv'] = v_pinv.tolist()
 
+        # Check if the pseudo-inverse is consistant
         _, _, u_sigma = tf_pca.reduce(keep_info=keep_info, n_dims=n_dims)
         np.testing.assert_array_almost_equal(
-            np.matmul((tf_pca.data - tf_pca.X_mean), v_pinv), u_sigma, decimal=5)
+            np.matmul((tf_pca.data - tf_pca.X_mean), v_pinv), u_sigma, decimal=4)
 
         # if not check_orthogonality(v_pinv, n_dims=(28 if eulerangle else 36),
         #                            decimal=1e-06):
         #     print("Warning: V_Inv Vectors not Orthogonal!")
 
-        # Get pseudo-inverse of matrix (∑ V^T): (∑ V^T)^-1
-        _, _, sigma_v = \
-            tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca)
-        sigma_v_pinv = pinv(sigma_v)
-        pca_traj_dict['Basis_Inv'] = sigma_v_pinv.tolist()
+        # Get pseudo-inverse of the Basis matrix
+        _, _, basis_mat = \
+            tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca,
+                         normal_basis=normal_basis)
+        basis_mat_pinv = pinv(basis_mat)
+        pca_traj_dict['Basis_Inv'] = basis_mat_pinv.tolist()
+
+        # Check if the pseudo-inverse is consistant
+        if normal_basis:
+            _, _, RHS = tf_pca.reduce(keep_info=keep_info, n_dims=n_dims) # U ∑
+        else:
+            RHS = tf_pca.u[:, 0:n_dims] # U
+
+        np.testing.assert_array_almost_equal(
+            np.matmul((tf_pca.data - tf_pca.X_mean), basis_mat_pinv), RHS, decimal=4)
+
+
 
         # u = tf_pca.u[:, 0:n_dims]
         # np.testing.assert_array_almost_equal(np.matmul(tf_pca.data, sigma_v_pinv),
@@ -556,6 +577,7 @@ def usage():
           "              [-k | --keep] <% of info. to be retained> \n"
           "              [-m | --mfile] <input motion file(s) or directory> \n"
           "              [-n | --normalise] \n"
+          "              [-N | --normal_basis] \n"
           "              [-O | --sine_offset] <list of sine-excitation offsets> \n"
           "              [-p | --pca] \n"
           "              [-P | --sine_period] <sine-excitation period (in seconds)> \n"
@@ -593,6 +615,7 @@ def main(argv):
     sine_period = None
     sine_offset = [0]
     frame_dur = None
+    normal_basis = False
 
     keep_info = None
     n_dims = None
@@ -604,11 +627,11 @@ def main(argv):
     sine_period_warning = False
 
     try:
-        opts, args = getopt.getopt(argv,"haprbuzviaenfsgSm:k:d:t:A:F:P:O:D:",
+        opts, args = getopt.getopt(argv,"haprbuzviaenfsgSNm:k:d:t:A:F:P:O:D:",
             ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
              "V", "inv", "eulerangle", "normalise", "fixed", "single", "graph",
-             "sine", "mfile=", "keep=", "dims=", "tol=", "sine_amp=", "sine_period=",
-             "sine_freq=", "sine_offset=", "frame_duration="])
+             "sine", "normal_basis", "mfile=", "keep=", "dims=", "tol=", "sine_amp=",
+             "sine_period=", "sine_freq=", "sine_offset=", "frame_duration="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -667,6 +690,8 @@ def main(argv):
            sine_offset = list(map(float, arg.strip('[]').split(',')))
        elif opt in ("-D", "--frame_duration"):
            frame_dur = float(arg)
+       elif opt in ("-N", "--normal_basis"):
+           normal_basis = True
 
     if keep_info is None and n_dims is None:
         keep_info = 0.9
@@ -711,10 +736,9 @@ def main(argv):
         norm_trajectory_dict = quat_trajectory_dict
 
     if eulerangle:
-        norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict,
-                                                          key_list)
-    ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict,
-                                                key_list, include=False)
+        norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict, key_list)
+    ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict, key_list,
+                                               include=False)
 
     if frame_dur is None:
         durations = np.squeeze(quat_trajectory_dict['frame_duration'].tolist())
@@ -756,6 +780,11 @@ def main(argv):
             pca_traj_dict['mirrored_motion'] = "True"
             break
 
+    if normal_basis:
+        pca_traj_dict['normal_basis'] = "True"
+    else:
+        pca_traj_dict['normal_basis'] = "False"
+
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     info_retained, num_dims_retained, pca_traj_dict = \
@@ -765,9 +794,10 @@ def main(argv):
                     v_matrix=v_matrix, inverse=inverse, eulerangle=eulerangle,
                     fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
                     normalise=normalise, single_pca=single_pca, graph=graph,
-                    activ_stat=activ_stat, orth_tol=orth_tol, sine=sine,
-                    sine_amp=sine_amp, sine_freq=sine_freq, sine_period=sine_period,
-                    sine_offset=sine_offset, frame_dur=frame_dur)
+                    activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
+                    sine=sine, sine_freq=sine_freq, sine_period=sine_period,
+                    sine_offset=sine_offset, frame_dur=frame_dur,
+                    normal_basis=normal_basis)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
@@ -820,7 +850,7 @@ def main(argv):
               "        Setting frame_duration to default value 0.03333.\n",
               "        Use flag: [-D | --frame_duration] to set a different value.\n")
 
-    if sine_period_warning:
+    if sine and sine_period_warning:
         print("WARNING: Sine-Period undefined! Use flag: [-P | --sine_period]\n")
 
 if __name__ == "__main__":
