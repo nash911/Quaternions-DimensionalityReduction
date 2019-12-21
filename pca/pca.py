@@ -607,6 +607,8 @@ def usage():
           "              [-u | --U] \n"
           "              [-v | --V] \n"
           "              [-z | --Sigma] \n"
+          "              [-c | --control]\n"
+          "              [-C | --character]\n"
           )
 
 
