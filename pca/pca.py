@@ -231,7 +231,7 @@ def decompose_quat_trajectories(motion_data, motion_control):
     quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
     quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
     quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
-
+    
     quat_trajs['chest_rotation'] = np.array(motion_data[:,8:12]) # Quaternion
     quat_trajs['neck_rotation'] = np.array(motion_data[:,12:16]) # Quaternion
 
@@ -255,7 +255,7 @@ def decompose_quat_trajectories(motion_data, motion_control):
         if key != 'root':
             quat_trajs[key] = np.array(motion_data[:, val[0]:val[1] ])
 
-
+    
     return quat_trajs
 
 
@@ -291,7 +291,7 @@ def decompose_euler_trajectories(motion_data, motion_control):
             else:
                 euler_trajs[key] = np.array(motion_data[:, index:index+1])
                 index = index + 1
-
+    
     return euler_trajs
 
 def normalise_quaternions(quat_dict):
@@ -452,7 +452,9 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, motion
                 fixed_root_pos=False, fixed_root_rot=False, normalise=False,
                 single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
                 sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0],
-                sine_period=1.0, sine_offset=[0], normal_basis=False):
+                sine_period=1.0, sine_offset=[0], normal_basis=False, euler_dims=28, quat_dims=36):
+    
+   
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -488,7 +490,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, motion
                 print("       Use flag: [-f | --fixed], to fix root-position and rotation\n")
                 sys.exit()
         # Remove non-controlable DOFs from reprojected trajectories, if exists
-        reproj_traj = reproj_traj[:, (-28 if eulerangle else -36):reproj_traj.shape[1]]
+        reproj_traj = reproj_traj[:, (-euler_dims if eulerangle else -quat_dims):reproj_traj.shape[1]]
         pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
                                               reproj_traj)).tolist()
 
@@ -688,7 +690,7 @@ def main(argv):
            keep_info = float(arg)
        elif opt in ("-d", "--dims"):
            if arg.lower() == 'all':
-               n_dims = 36
+               n_dims = None
            else:
                n_dims = int(arg)
        elif opt in ("-f", "--fixed"):
@@ -722,9 +724,27 @@ def main(argv):
     if keep_info is None and n_dims is None:
         keep_info = 0.9
 
-    if eulerangle and n_dims == 36:
-        n_dims = 28
 
+    with open(control_file) as cf:
+        motion_control = json.load(cf)
+
+    euler_tot_idx = 0
+    quat_tot_idx = 0
+    for key, val in motion_control['pose'].items():
+        if key != 'root':
+            if (val[1] - val[0] == 4 ):
+                euler_tot_idx = euler_tot_idx + 3
+                quat_tot_idx = quat_tot_idx + 4
+            else:
+                euler_tot_idx = euler_tot_idx + 1
+                quat_tot_idx = quat_tot_idx + 1
+
+    print(euler_tot_idx)
+    print(quat_tot_idx)
+    if eulerangle and n_dims == None:
+        n_dims = euler_tot_idx
+    if n_dims == None:
+        n_dims = quat_tot_idx
     if sine:
         if not single_pca:
             sine_amp = (np.ones(n_dims) * sine_amp[0]).tolist()
@@ -755,10 +775,6 @@ def main(argv):
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
     
-    with open(control_file) as cf:
-        motion_control = json.load(cf)
-    
-    print(motion_control)
     
     quat_trajectory_dict = decompose_quat_trajectories(motion_data, motion_control)
     if normalise and not eulerangle:
@@ -828,15 +844,16 @@ def main(argv):
                     activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
                     sine=sine, sine_freq=sine_freq, sine_period=sine_period,
                     sine_offset=sine_offset, frame_dur=frame_dur,
-                    normal_basis=normal_basis)
+                    normal_basis=normal_basis, euler_dims=euler_tot_idx, quat_dims=quat_tot_idx)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
+    print("Euler Dimension: ", euler_tot_idx)
+    print("Quaternion Dimensions: ", quat_tot_idx)
 
     # Create output path and file
     output_file_path = "/home/avbiswas/RLTCA/reduced_motion/pca_"
     output_file = '{}3d_'.format(character)
-    print("OUTPUT: ", output_file)
     if all_motions:
         output_file += 'all-motions_'
         if pca_traj_dict['mirrored_motion'] == "True":
