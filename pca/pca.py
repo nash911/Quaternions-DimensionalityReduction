@@ -224,66 +224,30 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
     return np.column_stack(trajs_data)
 
 
-def decompose_quat_trajectories(motion_data, motion_control):
+def decompose_quat_trajectories(motion_data, joint_idx):
     # Decomposes trajectories into individual joints (by name)
     quat_trajs = OrderedDict()
-    '''
-    quat_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
-    quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
-    quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
-    
-    quat_trajs['chest_rotation'] = np.array(motion_data[:,8:12]) # Quaternion
-    quat_trajs['neck_rotation'] = np.array(motion_data[:,12:16]) # Quaternion
-
-    quat_trajs['right_hip_rotation'] = np.array(motion_data[:,16:20]) # Quaternion
-    quat_trajs['right_knee_rotation'] = np.array(motion_data[:,20:21]) # 1D Joint
-    quat_trajs['right_ankle_rotation'] = np.array(motion_data[:,21:25]) # Quaternion
-    quat_trajs['right_shoulder_rotation'] = np.array(motion_data[:,25:29]) # Quaternion
-    quat_trajs['right_elbow_rotation'] = np.array(motion_data[:,29:30]) # 1D Joint
-
-    quat_trajs['left_hip_rotation'] = np.array(motion_data[:,30:34]) # Quaternion
-    quat_trajs['left_knee_rotation'] = np.array(motion_data[:,34:35]) # 1D Joint
-    quat_trajs['left_ankle_rotation'] = np.array(motion_data[:,35:39]) # Quaternion
-    quat_trajs['left_shoulder_rotation'] = np.array(motion_data[:,39:43]) # Quaternion
-    quat_trajs['left_elbow_rotation'] = np.array(motion_data[:,43:44]) # 1D Joint
-    '''
     quat_trajs['frame_duration']=np.array(motion_data[:, 0:1])
     quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
     quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
-    
-    for key, val in motion_control['pose'].items():
+
+    for key, val in joint_idx.items():
         if key != 'root':
             quat_trajs[key] = np.array(motion_data[:, val[0]:val[1] ])
 
-    
     return quat_trajs
 
 
-def decompose_euler_trajectories(motion_data, motion_control):
+def decompose_euler_trajectories(motion_data, joint_idx):
     # Decomposes trajectories into individual joints (by name)
     euler_trajs = OrderedDict()
 
     euler_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
     euler_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
     euler_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
-    '''
-    euler_trajs['chest_rotation'] = np.array(motion_data[:,8:11]) # EulerAngle
-    euler_trajs['neck_rotation'] = np.array(motion_data[:,11:14]) # EulerAngle
 
-    euler_trajs['right_hip_rotation'] = np.array(motion_data[:,14:17]) # EulerAngle
-    euler_trajs['right_knee_rotation'] = np.array(motion_data[:,17:18]) # 1D Joint
-    euler_trajs['right_ankle_rotation'] = np.array(motion_data[:,18:21]) # EulerAngle
-    euler_trajs['right_shoulder_rotation'] = np.array(motion_data[:,21:24]) # EulerAngle
-    euler_trajs['right_elbow_rotation'] = np.array(motion_data[:,24:25]) # 1D Joint
-
-    euler_trajs['left_hip_rotation'] = np.array(motion_data[:,25:28]) # EulerAngle
-    euler_trajs['left_knee_rotation'] = np.array(motion_data[:,28:29]) # 1D Joint
-    euler_trajs['left_ankle_rotation'] = np.array(motion_data[:,29:32]) # EulerAngle
-    euler_trajs['left_shoulder_rotation'] = np.array(motion_data[:,32:35]) # EulerAngle
-    euler_trajs['left_elbow_rotation'] = np.array(motion_data[:,35:36]) # 1D Joint
-    '''
     index = 8
-    for key, val in motion_control['pose'].items():
+    for key, val in joint_idx.items():
         if key != 'root':
             if (val[1] - val[0] == 4 ):
                 euler_trajs[key] = np.array(motion_data[:, index:index+3])
@@ -291,7 +255,7 @@ def decompose_euler_trajectories(motion_data, motion_control):
             else:
                 euler_trajs[key] = np.array(motion_data[:, index:index+1])
                 index = index + 1
-    
+
     return euler_trajs
 
 def normalise_quaternions(quat_dict):
@@ -446,15 +410,14 @@ def convert_to_json(pose_file):
 
     return motion_dict
 
-def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, motion_control,
+def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_idx,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
                 sigma_matrix=False, v_matrix=False, inverse=False, eulerangle=False,
                 fixed_root_pos=False, fixed_root_rot=False, normalise=False,
                 single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
                 sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0],
-                sine_period=1.0, sine_offset=[0], normal_basis=False, euler_dims=28, quat_dims=36):
-    
-   
+                sine_period=1.0, sine_offset=[0], normal_basis=False, euler_dims=28,
+                quat_dims=36):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -503,7 +466,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, motion
 
         if eulerangle:
             # Convert back to Quaternions
-            mixed_dict = decompose_euler_trajectories(np.array(pca_traj_dict['Frames']), motion_control)
+            mixed_dict = decompose_euler_trajectories(np.array(pca_traj_dict['Frames']), joint_idx)
             quat_dict = convert_euler_to_quat(mixed_dict, key_list)
             concat_quat_trajs = concatenate_trajectories(quat_dict)
             pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
@@ -609,14 +572,12 @@ def usage():
           "              [-u | --U] \n"
           "              [-v | --V] \n"
           "              [-z | --Sigma] \n"
-          "              [-c | --control]\n"
           "              [-C | --character]\n"
           )
 
 
 def main(argv):
     motion_files = list()
-    control_file = None
     all_motions = False
     pca = False
     reproj = False
@@ -690,7 +651,7 @@ def main(argv):
            keep_info = float(arg)
        elif opt in ("-d", "--dims"):
            if arg.lower() == 'all':
-               n_dims = None
+               n_dims = 'all'
            else:
                n_dims = int(arg)
        elif opt in ("-f", "--fixed"):
@@ -716,40 +677,11 @@ def main(argv):
            frame_dur = float(arg)
        elif opt in ("-N", "--normal_basis"):
            normal_basis = True
-       elif opt in ("-c", "--control"):
-           control_file=arg
        elif opt in ("-C", "--character"):
-           character=arg
- 
+           character = arg
+
     if keep_info is None and n_dims is None:
         keep_info = 0.9
-
-
-    with open(control_file) as cf:
-        motion_control = json.load(cf)
-
-    euler_tot_idx = 0
-    quat_tot_idx = 0
-    for key, val in motion_control['pose'].items():
-        if key != 'root':
-            if (val[1] - val[0] == 4 ):
-                euler_tot_idx = euler_tot_idx + 3
-                quat_tot_idx = quat_tot_idx + 4
-            else:
-                euler_tot_idx = euler_tot_idx + 1
-                quat_tot_idx = quat_tot_idx + 1
-
-    print(euler_tot_idx)
-    print(quat_tot_idx)
-    if eulerangle and n_dims == None:
-        n_dims = euler_tot_idx
-    if n_dims == None:
-        n_dims = quat_tot_idx
-    if sine:
-        if not single_pca:
-            sine_amp = (np.ones(n_dims) * sine_amp[0]).tolist()
-            sine_freq = (np.ones(n_dims) * sine_freq[0]).tolist()
-            sine_offset = (np.ones(n_dims) * sine_offset[0]).tolist()
 
     if os.path.isdir(motion_files[0]):
         all_motions = True
@@ -768,15 +700,40 @@ def main(argv):
         motion_dict_list.append(motion_dict)
     motion_data = np.vstack(motion_data)
 
+    euler_tot_idx = 0
+    quat_tot_idx = 0
+    joint_idx = motion_dict_list[0]['JointIdx']
+    for key, val in joint_idx.items():
+        if key != 'root':
+            if (val[1] - val[0] == 4 ):
+                euler_tot_idx = euler_tot_idx + 3
+                quat_tot_idx = quat_tot_idx + 4
+            else:
+                euler_tot_idx = euler_tot_idx + 1
+                quat_tot_idx = quat_tot_idx + 1
+
+    num_frames = motion_data.shape[0]
+    if n_dims == 'all':
+        if eulerangle:
+            n_dims = min(euler_tot_idx, num_frames)
+        else:
+            n_dims = min(quat_tot_idx, num_frames)
+    print("n_dims: ", n_dims)
+
+    if sine:
+        if not single_pca:
+            sine_amp = (np.ones(n_dims) * sine_amp[0]).tolist()
+            sine_freq = (np.ones(n_dims) * sine_freq[0]).tolist()
+            sine_offset = (np.ones(n_dims) * sine_offset[0]).tolist()
+
     # Random shuffle data-points (Won't make sense to shuffle when root NOT fixed)
     # np.random.shuffle(motion_data)
 
     print("Frames count: ", motion_data.shape[0])
 
     key_list = ['frame_duration', 'root_position', 'root_rotation']
-    
-    
-    quat_trajectory_dict = decompose_quat_trajectories(motion_data, motion_control)
+
+    quat_trajectory_dict = decompose_quat_trajectories(motion_data, joint_idx)
     if normalise and not eulerangle:
         norm_trajectory_dict = normalise_quaternions(quat_trajectory_dict)
     else:
@@ -835,16 +792,17 @@ def main(argv):
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     info_retained, num_dims_retained, pca_traj_dict = \
-        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list, motion_control = motion_control,
-                    n_dims=n_dims, keep_info=keep_info, pca=pca, reproj=reproj,
-                    basis=basis, u_matrix=u_matrix, sigma_matrix=sigma_matrix,
-                    v_matrix=v_matrix, inverse=inverse, eulerangle=eulerangle,
-                    fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
-                    normalise=normalise, single_pca=single_pca, graph=graph,
-                    activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
-                    sine=sine, sine_freq=sine_freq, sine_period=sine_period,
-                    sine_offset=sine_offset, frame_dur=frame_dur,
-                    normal_basis=normal_basis, euler_dims=euler_tot_idx, quat_dims=quat_tot_idx)
+        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list,
+                    joint_idx=joint_idx, n_dims=n_dims, keep_info=keep_info,
+                    pca=pca, reproj=reproj, basis=basis, u_matrix=u_matrix,
+                    sigma_matrix=sigma_matrix, v_matrix=v_matrix, inverse=inverse,
+                    eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
+                    fixed_root_rot=fixed_root_rot, normalise=normalise,
+                    single_pca=single_pca, graph=graph, activ_stat=activ_stat,
+                    orth_tol=orth_tol, sine_amp=sine_amp, sine_freq=sine_freq,
+                    sine_period=sine_period, sine_offset=sine_offset, sine=sine,
+                    frame_dur=frame_dur, normal_basis=normal_basis,
+                    euler_dims=euler_tot_idx, quat_dims=quat_tot_idx)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
@@ -852,7 +810,7 @@ def main(argv):
     print("Quaternion Dimensions: ", quat_tot_idx)
 
     # Create output path and file
-    output_file_path = "/home/avbiswas/RLTCA/reduced_motion/pca_"
+    output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
     output_file = '{}3d_'.format(character)
     if all_motions:
         output_file += 'all-motions_'
