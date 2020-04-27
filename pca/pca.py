@@ -4,14 +4,15 @@ from Quaternion import Quat, normalize
 import tensorflow as tf
 import math
 from collections import OrderedDict
-import sys, getopt
+import sys
+import getopt
 import json
 import os
 import glob
-from mpl_toolkits.mplot3d import Axes3D
+# from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy.stats import ortho_group
+# import seaborn as sns
+# from scipy.stats import ortho_group
 
 
 class TF_PCA:
@@ -25,10 +26,12 @@ class TF_PCA:
         self.X_mean = None
         self.u = None
         self.v = None
-        self.singular_values = None
+        self.singular_vals = None
+        self.norm_singular_vals = None
         self.sigma = None
+        self.norm_sigma = None
 
-    def fit(self, normalise=False):
+    def fit(self, normalise=False, singular_val_scale=None):
         self.graph = tf.Graph()
         with self.graph.as_default():
             self.X = tf.placeholder(self.dtype, shape=self.data.shape)
@@ -40,21 +43,31 @@ class TF_PCA:
                 X_mean = tf.zeros(shape=self.data.shape[1], dtype=self.dtype)
 
             # Perform SVD
-            singular_values, u, v = tf.svd(self.X - X_mean)
+            singular_vals, u, v = tf.svd(self.X - X_mean)
 
             # Create ∑ matrix
-            sigma = tf.diag(singular_values)
+            sigma = tf.diag(singular_vals)
+
+            # Normalised Scaled Singular Values
+            if singular_val_scale is None:
+                norm_singular_vals = tf.no_op()
+                norm_sigma = tf.no_op()
+            else:
+                norm_singular_vals = (singular_vals / tf.reduce_sum(singular_vals)) * \
+                                     singular_val_scale
+                norm_sigma = tf.diag(norm_singular_vals)
 
         with tf.Session(graph=self.graph) as session:
-            self.u, self.singular_values, self.sigma, self.v, self.X_mean = \
-                session.run([u, singular_values, sigma, v, X_mean],
+            [self.u, self.singular_vals, self.norm_singular_vals, self.sigma, self.norm_sigma,
+             self.v, self.X_mean] = \
+                session.run([u, singular_vals, norm_singular_vals, sigma, norm_sigma, v, X_mean],
                             feed_dict={self.X: self.data})
 
     def calc_info_and_dims(self, n_dims=None, keep_info=None, single_pca=False):
         total_dims = self.data.shape[1]
 
         # Normalize singular values
-        normalised_singular_values = self.singular_values / sum(self.singular_values)
+        normalised_singular_values = self.singular_vals / sum(self.singular_vals)
 
         # Create the aggregated ladder of kept information per dimension
         ladder = np.cumsum(normalised_singular_values)
@@ -75,7 +88,6 @@ class TF_PCA:
                 keep_info = ladder[abs(n_dims)-1]
 
         return n_dims, keep_info
-
 
     def reduce(self, n_dims=None, keep_info=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
@@ -98,10 +110,9 @@ class TF_PCA:
         with tf.Session(graph=self.graph) as session:
             return keep_info, n_dims, session.run(pca)
 
-
     def reproject(self, n_dims=None, keep_info=None, sine=False, single_pca=False,
                   frame_dur=0.03, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
-                  sine_offset=[0], normal_basis=False):
+                  sine_offset=[0], normal_basis=False, singular_val_scale=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
         total_dims = self.data.shape[1]
 
@@ -113,8 +124,8 @@ class TF_PCA:
                     start_idx = total_dims + n_dims
 
                 # Cut out the relevant part from ∑, U and V
-                sigma = tf.slice(self.sigma, [start_idx, start_idx],
-                                 [1, 1])
+                sigma = tf.slice((self.sigma if singular_val_scale is None else self.norm_sigma),
+                                 [start_idx, start_idx], [1, 1])
                 if sine:
                     u = self.sine_fn(frame_dur=frame_dur, amp=sine_amp, freq=sine_freq,
                                      period=sine_period, offset=sine_offset)
@@ -127,8 +138,8 @@ class TF_PCA:
                 else:
                     start_idx = total_dims + n_dims
                 # Cut out the relevant part from ∑, U and V
-                sigma = tf.slice(self.sigma, [start_idx, start_idx],
-                                 [abs(n_dims), abs(n_dims)])
+                sigma = tf.slice((self.sigma if singular_val_scale is None else self.norm_sigma),
+                                 [start_idx, start_idx], [abs(n_dims), abs(n_dims)])
                 if sine:
                     u = self.sine_fn(frame_dur=frame_dur, amp=sine_amp, freq=sine_freq,
                                      period=sine_period, offset=sine_offset)
@@ -145,21 +156,22 @@ class TF_PCA:
         with tf.Session(graph=self.graph) as session:
             return keep_info, n_dims, session.run(reproj)
 
-
     def basis(self, n_dims=None, keep_info=None, single_pca=False,
-              normal_basis=False):
+              normal_basis=False, singular_val_scale=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
 
         if n_dims >= 0:
             if normal_basis:
                 b = self.v[:, 0:n_dims].T
             else:
-                b = np.matmul(self.sigma[0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
+                b = np.matmul((self.sigma if singular_val_scale is None else self.norm_sigma)
+                              [0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
         else:
             if normal_basis:
                 b = self.v[:, n_dims:].T
             else:
-                b = np.matmul(self.sigma[n_dims:, n_dims:], self.v[:, n_dims:].T)
+                b = np.matmul((self.sigma if singular_val_scale is None else self.norm_sigma)
+                              [n_dims:, n_dims:], self.v[:, n_dims:].T)
 
         return keep_info, n_dims, b
 
@@ -206,20 +218,19 @@ def plot(data):
     plt.show()
 
 
-def concatenate_trajectories(trajs_dict, key_list = [], include=False,
-                             fixed_root_pos=False, fixed_root_rot=False):
+def concatenate_trajectories(trajs_dict, key_list=[], include=False, fixed_root_pos=False,
+                             fixed_root_rot=False):
     trajs_data = []
     for k, v in trajs_dict.items():
         if include:
             if k in key_list:
                 if k == 'root_position' and fixed_root_pos:
-                    #v = (np.ones_like(v) * v[0]).tolist()
                     v = (np.ones_like(v) * 1.0).tolist()
                 if k == 'root_rotation' and fixed_root_rot:
                     v = (np.zeros_like(v) + np.array([1, 0, 0, 0])).tolist()
                 trajs_data.append(v)
         if not include:
-            if not k in key_list:
+            if k not in key_list:
                 trajs_data.append(v)
     return np.column_stack(trajs_data)
 
@@ -227,13 +238,13 @@ def concatenate_trajectories(trajs_dict, key_list = [], include=False,
 def decompose_quat_trajectories(motion_data, joint_idx):
     # Decomposes trajectories into individual joints (by name)
     quat_trajs = OrderedDict()
-    quat_trajs['frame_duration']=np.array(motion_data[:, 0:1])
-    quat_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
-    quat_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
+    quat_trajs['frame_duration'] = np.array(motion_data[:, 0:1])
+    quat_trajs['root_position'] = np.array(motion_data[:, 1:4])  # Position
+    quat_trajs['root_rotation'] = np.array(motion_data[:, 4:8])  # Quaternion
 
     for key, val in joint_idx.items():
         if key != 'root':
-            quat_trajs[key] = np.array(motion_data[:, val[0]:val[1] ])
+            quat_trajs[key] = np.array(motion_data[:, val[0]:val[1]])
 
     return quat_trajs
 
@@ -242,14 +253,14 @@ def decompose_euler_trajectories(motion_data, joint_idx):
     # Decomposes trajectories into individual joints (by name)
     euler_trajs = OrderedDict()
 
-    euler_trajs['frame_duration'] = np.array(motion_data[:,0:1]) # Time
-    euler_trajs['root_position'] = np.array(motion_data[:,1:4])  # Position
-    euler_trajs['root_rotation'] = np.array(motion_data[:,4:8])  # Quaternion
+    euler_trajs['frame_duration'] = np.array(motion_data[:, 0:1])  # Time
+    euler_trajs['root_position'] = np.array(motion_data[:, 1:4])  # Position
+    euler_trajs['root_rotation'] = np.array(motion_data[:, 4:8])  # Quaternion
 
     index = 8
     for key, val in joint_idx.items():
         if key != 'root':
-            if (val[1] - val[0] == 4 ):
+            if (val[1] - val[0] == 4):
                 euler_trajs[key] = np.array(motion_data[:, index:index+3])
                 index = index + 3
             else:
@@ -258,6 +269,7 @@ def decompose_euler_trajectories(motion_data, joint_idx):
 
     return euler_trajs
 
+
 def normalise_quaternions(quat_dict):
     norm_quat_dict = OrderedDict()
 
@@ -265,10 +277,10 @@ def normalise_quaternions(quat_dict):
         if v.shape[1] == 4:
             norm_quats = []
             for r in v:
-                q = np.array([r[1], r[2], r[3], r[0]]) # [x, y, z, w]
+                q = np.array([r[1], r[2], r[3], r[0]])  # [x, y, z, w]
                 nq = Quat(normalize(q))
                 nq_v = nq._get_q()
-                norm_quats.append([nq_v[3], nq_v[0], nq_v[1], nq_v[2]]) # [w, x, y, z]
+                norm_quats.append([nq_v[3], nq_v[0], nq_v[1], nq_v[2]])  # [w, x, y, z]
             norm_quat_dict[k] = np.array(norm_quats)
         else:
             norm_quat_dict[k] = v
@@ -283,10 +295,10 @@ def convert_to_axis_angle(quaternion_dict):
         if v.shape[1] == 4:
             axis_angle = []
             for r in v:
-                q = np.array([r[1], r[2], r[3], r[0]]) # [x, y, z, w]
+                q = np.array([r[1], r[2], r[3], r[0]])  # [x, y, z, w]
                 quat = Quat(q)
                 a = quat._get_angle_axis()
-                axis_angle.append(np.array([a[0], a[1][0], a[1][1], a[1][2]])) # [Ө, x, y, z]
+                axis_angle.append(np.array([a[0], a[1][0], a[1][1], a[1][2]]))  # [Ө, x, y, z]
             axis_angle_dict[k] = np.array(axis_angle)
         else:
             axis_angle_dict[k] = v
@@ -314,6 +326,7 @@ def convert_to_quaternion(axis_angle_dict, k_list):
 
     return quat_dict
 
+
 def convert_quat_to_euler(quat_dict, k_list):
     euler_dict = OrderedDict()
 
@@ -321,7 +334,7 @@ def convert_quat_to_euler(quat_dict, k_list):
         if v.shape[1] == 4 and k not in k_list:
             euler_angles = []
             for r in v:
-                q = np.array([r[1], r[2], r[3], r[0]]) # [x, y, z, w]
+                q = np.array([r[1], r[2], r[3], r[0]])  # [x, y, z, w]
                 nq = Quat(normalize(q))
                 nq_v = nq._get_q()
                 w = nq_v[3]
@@ -364,10 +377,14 @@ def convert_euler_to_quat(euler_dict, key_list):
                 pitch = r[1]
                 yaw = r[2]
 
-                qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
-                qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
-                qz = np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) * np.sin(pitch/2) * np.cos(yaw/2)
-                qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
+                qx = (np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) *
+                      np.sin(pitch/2) * np.sin(yaw/2))
+                qy = (np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) *
+                      np.cos(pitch/2) * np.sin(yaw/2))
+                qz = (np.cos(roll/2) * np.cos(pitch/2) * np.sin(yaw/2) - np.sin(roll/2) *
+                      np.sin(pitch/2) * np.cos(yaw/2))
+                qw = (np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) *
+                      np.sin(pitch/2) * np.sin(yaw/2))
 
                 quats.append([qw, qx, qy, qz])
             quat_dict[k] = np.array(quats)
@@ -397,6 +414,7 @@ def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06, normal_basis=False):
 
     return orthogonal
 
+
 def convert_to_json(pose_file):
     with open(pose_file, 'r') as pf:
         pose_arr = np.loadtxt(pf)
@@ -410,14 +428,14 @@ def convert_to_json(pose_file):
 
     return motion_dict
 
-def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_idx,
-                keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False,
-                sigma_matrix=False, v_matrix=False, inverse=False, eulerangle=False,
-                fixed_root_pos=False, fixed_root_rot=False, normalise=False,
-                single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
-                sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0],
-                sine_period=1.0, sine_offset=[0], normal_basis=False, euler_dims=28,
-                quat_dims=36):
+
+def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_idx, inverse=False,
+                keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False, v_matrix=False,
+                sigma_matrix=False, eulerangle=False, fixed_root_pos=False, fixed_root_rot=False,
+                normalise=False, single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
+                sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
+                sine_offset=[0], euler_dims=28, quat_dims=36, singular_val_scale=None,
+                normal_basis=False):
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -429,16 +447,14 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
     if reproj:
         # Reproject the trajectories on to a linear sub-space in the full space: U ∑ V^T
         info_retained, num_dims_retained, reproj_traj = \
-            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims, sine=sine,
-                             single_pca=single_pca,frame_dur=frame_dur,
-                             normal_basis=normal_basis, sine_amp=sine_amp,
-                             sine_freq=sine_freq, sine_period=sine_period,
-                             sine_offset=sine_offset)
+            tf_pca.reproject(keep_info=keep_info, n_dims=n_dims, sine=sine, single_pca=single_pca,
+                             frame_dur=frame_dur, normal_basis=normal_basis, sine_amp=sine_amp,
+                             sine_freq=sine_freq, sine_period=sine_period, sine_offset=sine_offset,
+                             singular_val_scale=singular_val_scale)
 
         # Replace original trajectories, in the controlable DOFs, with
         # reprojected trajectories
-        unchanged_traj = concatenate_trajectories(trajectory_dict, key_list,
-                                                  include=True,
+        unchanged_traj = concatenate_trajectories(trajectory_dict, key_list, include=True,
                                                   fixed_root_pos=fixed_root_pos,
                                                   fixed_root_rot=fixed_root_rot)
 
@@ -453,9 +469,9 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
                 print("       Use flag: [-f | --fixed], to fix root-position and rotation\n")
                 sys.exit()
         # Remove non-controlable DOFs from reprojected trajectories, if exists
-        reproj_traj = reproj_traj[:, (-euler_dims if eulerangle else -quat_dims):reproj_traj.shape[1]]
-        pca_traj_dict['Frames'] = np.column_stack((unchanged_traj,
-                                              reproj_traj)).tolist()
+        reproj_traj = \
+            reproj_traj[:, (-euler_dims if eulerangle else -quat_dims):reproj_traj.shape[1]]
+        pca_traj_dict['Frames'] = np.column_stack((unchanged_traj, reproj_traj)).tolist()
 
         # if axisangle:
         #     # Convert back to Quaternions
@@ -466,7 +482,8 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
 
         if eulerangle:
             # Convert back to Quaternions
-            mixed_dict = decompose_euler_trajectories(np.array(pca_traj_dict['Frames']), joint_idx)
+            mixed_dict = \
+                decompose_euler_trajectories(np.array(pca_traj_dict['Frames']), joint_idx)
             quat_dict = convert_euler_to_quat(mixed_dict, key_list)
             concat_quat_trajs = concatenate_trajectories(quat_dict)
             pca_traj_dict['Frames'] = concat_quat_trajs.tolist()
@@ -475,7 +492,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
         # Get full-rank basis vectors of the linear sub-space: ∑ V^T
         info_retained, num_dims_retained, basis_v = \
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca,
-                         normal_basis=normal_basis)
+                         normal_basis=normal_basis, singular_val_scale=singular_val_scale)
 
         if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol,
                                    normal_basis=normal_basis):
@@ -495,10 +512,14 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
         pca_traj_dict['U'] = U.tolist()
 
     if sigma_matrix:
-        Sigma = tf_pca.sigma[:n_dims, :n_dims]
-        Singular_values = tf_pca.singular_values[:n_dims]
+        Sigma = (tf_pca.norm_sigma if singular_val_scale is not None else
+                 tf_pca.sigma)[:n_dims, :n_dims]
+        Singular_values = (tf_pca.norm_singular_vals if singular_val_scale is not None else
+                           tf_pca.singular_vals)[:n_dims]
         pca_traj_dict['Sigma'] = Sigma.tolist()
         pca_traj_dict['Singular_Values'] = Singular_values.tolist()
+        print("\nSingular_values:", Singular_values, "\n")
+        print("\nNorm Sing_vals :", Singular_values/np.sum(Singular_values), "\n")
 
     if v_matrix:
         V = tf_pca.v[:, 0:n_dims]
@@ -521,7 +542,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
         # Get pseudo-inverse of the Basis matrix
         _, _, basis_mat = \
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca,
-                         normal_basis=normal_basis)
+                         normal_basis=normal_basis, singular_val_scale=singular_val_scale)
         basis_mat_pinv = pinv(basis_mat)
         pca_traj_dict['Basis_Inv'] = basis_mat_pinv.tolist()
 
@@ -550,6 +571,8 @@ def usage():
     print("Usage: pca.py [-a | --activ_stat] \n"
           "              [-A | --sine_amp] <list of sine-excitation amplitudes> \n"
           "              [-b | --basis] \n"
+          "              [-c | --scaling_constant] <singular value scaling constant. '1' indicates "
+          "normalised singular values> \n"
           "              [-d | --dims] <no. of dims>/'all' \n"
           "              [-D | --frame_duration] <frame duration in seconds>/'all' \n"
           "              [-e | --eulerangle] \n"
@@ -572,7 +595,6 @@ def usage():
           "              [-u | --U] \n"
           "              [-v | --V] \n"
           "              [-z | --Sigma] \n"
-          "              [-C | --character]\n"
           )
 
 
@@ -604,6 +626,7 @@ def main(argv):
     character = "humanoid"
     keep_info = None
     n_dims = None
+    singular_val_scale = None
 
     info_retained = None
     num_dims_retained = None
@@ -612,73 +635,79 @@ def main(argv):
     sine_period_warning = False
 
     try:
-        opts, args = getopt.getopt(argv,"haprbuzviaenfsgSNm:k:d:t:A:F:P:O:D:c:C:",
-            ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
-             "V", "inv", "eulerangle", "normalise", "fixed", "single", "graph",
-             "sine", "normal_basis", "mfile=", "keep=", "dims=", "tol=", "sine_amp=",
-             "sine_period=", "sine_freq=", "sine_offset=", "frame_duration=","control=","character="])
+        opts, args = getopt.getopt(argv, "haprbuzviaenfsgSNm:k:d:t:A:F:P:O:D:c:",
+                                   ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
+                                    "V", "inv", "eulerangle", "normalise", "fixed", "single",
+                                    "graph", "sine", "normal_basis", "mfile=", "keep=", "dims=",
+                                    "tol=", "sine_amp=", "sine_period=", "sine_freq=",
+                                    "sine_offset=", "frame_duration=", "scaling_constant="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
 
     for opt, arg in opts:
-       if opt in ("-h", "--help"):
-           usage()
-           sys.exit()
-       elif opt in ("-a", "--activ_stat"):
-           activ_stat = True
-       elif opt in ("-p", "--pca"):
-           pca = True
-       elif opt in ("-r", "--reproj"):
-           reproj = True
-       elif opt in ("-b", "--basis"):
-           basis = True
-       elif opt in ("-u", "--U"):
-           u_matrix = True
-       elif opt in ("-z", "--Sigma"):
-           sigma_matrix = True
-       elif opt in ("-v", "--V"):
-           v_matrix = True
-       elif opt in ("-i", "--inv"):
-           inverse = True
-       elif opt in ("-e", "--eulerangle"):
-           eulerangle = True
-       elif opt in ("-n", "--normalise"):
-           normalise = True
-       elif opt in ("-m", "--mfile"):
-           motion_files.append(arg)
-       elif opt in ("-k", "--keep"):
-           keep_info = float(arg)
-       elif opt in ("-d", "--dims"):
-           if arg.lower() == 'all':
-               n_dims = 'all'
-           else:
-               n_dims = int(arg)
-       elif opt in ("-f", "--fixed"):
-           fixed_root_pos = True
-           fixed_root_rot = True
-       elif opt in ("-s", "--single"):
-           single_pca = True
-       elif opt in ("-g", "--graph"):
-           graph = True
-       elif opt in ("-t", "--tol"):
-           orth_tol = float(arg)
-       elif opt in ("-S", "--sine"):
-           sine = True
-       elif opt in ("-A", "--sine_amp"):
-           sine_amp = list(map(float, arg.strip('[]').split(',')))
-       elif opt in ("-F", "--sine_freq"):
-           sine_freq = list(map(float, arg.strip('[]').split(',')))
-       elif opt in ("-P", "--sine_period"):
-           sine_period = float(arg)
-       elif opt in ("-O", "--sine_offset"):
-           sine_offset = list(map(float, arg.strip('[]').split(',')))
-       elif opt in ("-D", "--frame_duration"):
-           frame_dur = float(arg)
-       elif opt in ("-N", "--normal_basis"):
-           normal_basis = True
-       elif opt in ("-C", "--character"):
-           character = arg
+        if opt in ("-h", "--help"):
+            usage()
+            sys.exit()
+        elif opt in ("-a", "--activ_stat"):
+            activ_stat = True
+        elif opt in ("-p", "--pca"):
+            pca = True
+        elif opt in ("-r", "--reproj"):
+            reproj = True
+        elif opt in ("-b", "--basis"):
+            basis = True
+        elif opt in ("-u", "--U"):
+            u_matrix = True
+        elif opt in ("-z", "--Sigma"):
+            sigma_matrix = True
+        elif opt in ("-v", "--V"):
+            v_matrix = True
+        elif opt in ("-i", "--inv"):
+            inverse = True
+        elif opt in ("-e", "--eulerangle"):
+            eulerangle = True
+        elif opt in ("-n", "--normalise"):
+            normalise = True
+        elif opt in ("-m", "--mfile"):
+            motion_files.append(arg)
+        elif opt in ("-k", "--keep"):
+            keep_info = float(arg)
+        elif opt in ("-d", "--dims"):
+            if arg.lower() == 'all':
+                n_dims = 'all'
+            else:
+                n_dims = int(arg)
+        elif opt in ("-f", "--fixed"):
+            fixed_root_pos = True
+            fixed_root_rot = True
+        elif opt in ("-s", "--single"):
+            single_pca = True
+        elif opt in ("-g", "--graph"):
+            graph = True
+        elif opt in ("-t", "--tol"):
+            orth_tol = float(arg)
+        elif opt in ("-S", "--sine"):
+            sine = True
+        elif opt in ("-A", "--sine_amp"):
+            sine_amp = list(map(float, arg.strip('[]').split(',')))
+        elif opt in ("-F", "--sine_freq"):
+            sine_freq = list(map(float, arg.strip('[]').split(',')))
+        elif opt in ("-P", "--sine_period"):
+            sine_period = float(arg)
+        elif opt in ("-O", "--sine_offset"):
+            sine_offset = list(map(float, arg.strip('[]').split(',')))
+        elif opt in ("-D", "--frame_duration"):
+            frame_dur = float(arg)
+        elif opt in ("-N", "--normal_basis"):
+            normal_basis = True
+        elif opt in ("-c", "--scaling_constant"):
+            singular_val_scale = float(arg)
+
+    if normal_basis and singular_val_scale is not None:
+        print("Error: Flags [-N | --normal_basis] and [-c | --scaling_constant] are both set.\n"
+              "Only use either at a time.\n")
+        sys.exit()
 
     if keep_info is None and n_dims is None:
         keep_info = 0.9
@@ -694,7 +723,7 @@ def main(argv):
         try:
             with open(m_file) as mf:
                 motion_dict = json.load(mf)
-        except:
+        except json.decoder.JSONDecodeError:
             motion_dict = convert_to_json(m_file)
         motion_data.append(np.array(motion_dict['Frames']))
         motion_dict_list.append(motion_dict)
@@ -705,7 +734,7 @@ def main(argv):
     joint_idx = motion_dict_list[0]['JointIdx']
     for key, val in joint_idx.items():
         if key != 'root':
-            if (val[1] - val[0] == 4 ):
+            if (val[1] - val[0] == 4):
                 euler_tot_idx = euler_tot_idx + 3
                 quat_tot_idx = quat_tot_idx + 4
             else:
@@ -741,8 +770,7 @@ def main(argv):
 
     if eulerangle:
         norm_trajectory_dict = convert_quat_to_euler(norm_trajectory_dict, key_list)
-    ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict, key_list,
-                                               include=False)
+    ref_traj_matrix = concatenate_trajectories(norm_trajectory_dict, key_list, include=False)
 
     if frame_dur is None:
         durations = np.squeeze(quat_trajectory_dict['frame_duration'].tolist())
@@ -761,7 +789,7 @@ def main(argv):
     tf_pca = TF_PCA(ref_traj_matrix)
 
     # Compute U, ∑ and V
-    tf_pca.fit(normalise)
+    tf_pca.fit(normalise, singular_val_scale)
 
     # Create a new reduced-motion-dictionary
     pca_traj_dict = OrderedDict()
@@ -789,20 +817,20 @@ def main(argv):
     else:
         pca_traj_dict['normal_basis'] = "False"
 
+    pca_traj_dict['singular_val_scaling_const'] = singular_val_scale
+
     key_list = ['frame_duration', 'root_position', 'root_rotation']
 
     info_retained, num_dims_retained, pca_traj_dict = \
-        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list,
-                    joint_idx=joint_idx, n_dims=n_dims, keep_info=keep_info,
-                    pca=pca, reproj=reproj, basis=basis, u_matrix=u_matrix,
-                    sigma_matrix=sigma_matrix, v_matrix=v_matrix, inverse=inverse,
-                    eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
-                    fixed_root_rot=fixed_root_rot, normalise=normalise,
-                    single_pca=single_pca, graph=graph, activ_stat=activ_stat,
-                    orth_tol=orth_tol, sine_amp=sine_amp, sine_freq=sine_freq,
-                    sine_period=sine_period, sine_offset=sine_offset, sine=sine,
-                    frame_dur=frame_dur, normal_basis=normal_basis,
-                    euler_dims=euler_tot_idx, quat_dims=quat_tot_idx)
+        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list, joint_idx=joint_idx,
+                    n_dims=n_dims, keep_info=keep_info, pca=pca, reproj=reproj, basis=basis,
+                    u_matrix=u_matrix, sigma_matrix=sigma_matrix, v_matrix=v_matrix,
+                    inverse=inverse, eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
+                    fixed_root_rot=fixed_root_rot, normalise=normalise, single_pca=single_pca,
+                    graph=graph, activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
+                    sine_freq=sine_freq, sine_period=sine_period, sine_offset=sine_offset,
+                    sine=sine, frame_dur=frame_dur, singular_val_scale=singular_val_scale,
+                    euler_dims=euler_tot_idx, quat_dims=quat_tot_idx, normal_basis=normal_basis)
 
     print("No. of dimensions: ", num_dims_retained)
     print("Keept info: ", info_retained)
@@ -822,13 +850,13 @@ def main(argv):
             motion_name = motion_name.split(".")[0]
             motion_name = motion_name.split("{}3d_".format(character))[-1]
             motion_name = motion_name.split("mirrored_")[-1]
-            if not motion_name in output_file:
+            if motion_name not in output_file:
                 output_file += motion_name + '-'
         # Removing the last '-'
         output_file = output_file[:-1]
     domain = "euler_" if eulerangle else "quat_"
-    output_file = output_file_path + domain + output_file + "_" + \
-                  str(info_retained) + "_" + str(num_dims_retained) + ".txt"
+    output_file = output_file_path + domain + output_file + "_" + str(info_retained) + "_" + \
+        str(num_dims_retained) + ".txt"
 
     # Save pca trajectories and basis dictionary on to the created output file
     with open(output_file, 'w') as fp:
@@ -859,6 +887,7 @@ def main(argv):
 
     if sine and sine_period_warning:
         print("WARNING: Sine-Period undefined! Use flag: [-P | --sine_period]\n")
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
