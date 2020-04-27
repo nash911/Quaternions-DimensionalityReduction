@@ -623,7 +623,7 @@ def main(argv):
     sine_offset = [0]
     frame_dur = None
     normal_basis = False
-    character = "humanoid"
+    character = None
     keep_info = None
     n_dims = None
     singular_val_scale = None
@@ -633,6 +633,8 @@ def main(argv):
 
     duration_warning = False
     sine_period_warning = False
+
+    characters = ['humanoid', 'biped', 'salamander', 'cheetah']
 
     try:
         opts, args = getopt.getopt(argv, "haprbuzviaenfsgSNm:k:d:t:A:F:P:O:D:c:",
@@ -720,6 +722,10 @@ def main(argv):
     motion_data = list()
     motion_dict_list = list()
     for m_file in motion_files:
+        for ch in characters:
+            if ch in m_file:
+                character = ch
+                continue
         try:
             with open(m_file) as mf:
                 motion_dict = json.load(mf)
@@ -839,7 +845,7 @@ def main(argv):
 
     # Create output path and file
     output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
-    output_file = '{}3d_'.format(character)
+    output_file = '{}_'.format(character)
     if all_motions:
         output_file += 'all-motions_'
         if pca_traj_dict['mirrored_motion'] == "True":
@@ -850,7 +856,7 @@ def main(argv):
             motion_name = motion_name.split(".")[0]
             motion_name = motion_name.split("{}3d_".format(character))[-1]
             motion_name = motion_name.split("mirrored_")[-1]
-            if motion_name not in output_file:
+            if motion_name not in output_file and 'motion' not in motion_name:
                 output_file += motion_name + '-'
         # Removing the last '-'
         output_file = output_file[:-1]
