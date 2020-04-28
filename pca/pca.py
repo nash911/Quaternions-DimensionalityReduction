@@ -679,7 +679,10 @@ def main(argv):
             if arg.lower() == 'all':
                 n_dims = 'all'
             else:
-                n_dims = int(arg)
+                try:
+                    n_dims = int(arg)
+                except ValueError:
+                    n_dims = list(map(int, arg.strip('[]').split(',')))
         elif opt in ("-f", "--fixed"):
             fixed_root_pos = True
             fixed_root_rot = True
@@ -753,7 +756,29 @@ def main(argv):
             n_dims = min(euler_tot_idx, num_frames)
         else:
             n_dims = min(quat_tot_idx, num_frames)
+        if single_pca:
+            n_dims = [n_dims]
+
+    if type(n_dims) == list:
+        if len(n_dims) == 1:
+            n_dims = list(range(1, n_dims[0]+1))
+        if not single_pca:
+            n_dims = [n_dims]
+    elif type(n_dims) == int:
+        n_dims = [n_dims]
+    else:
+        print("Error: Incorrect dtype:", type(n_dims), "for n_dims")
+        sys.exit()
+
     print("n_dims: ", n_dims)
+
+    if single_pca and len(n_dims) > 1:
+        # Empty content of folder 'x'
+        folder = 'Output/single_coactivations'
+        for filename in os.listdir(folder):
+            file_path = os.path.join(folder, filename)
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
 
     if sine:
         if not single_pca:
@@ -797,76 +822,84 @@ def main(argv):
     # Compute U, ∑ and V
     tf_pca.fit(normalise, singular_val_scale)
 
-    # Create a new reduced-motion-dictionary
-    pca_traj_dict = OrderedDict()
-    pca_traj_dict["Loop"] = "wrap"
+    for dim in n_dims:
+        # Create a new reduced-motion-dictionary
+        pca_traj_dict = OrderedDict()
+        pca_traj_dict["Loop"] = "wrap"
 
-    # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
-    if eulerangle:
-        pca_traj_dict['Domain'] = "Eulerangle"
-    else:
-        pca_traj_dict['Domain'] = "Quaternion"
+        # Set the domain of the coordination space (Basis-Vectors - ∑ V^T)
+        if eulerangle:
+            pca_traj_dict['Domain'] = "Eulerangle"
+        else:
+            pca_traj_dict['Domain'] = "Quaternion"
 
-    if all_motions:
-        pca_traj_dict['all_motions'] = "True"
-    else:
-        pca_traj_dict['all_motions'] = "False"
+        if all_motions:
+            pca_traj_dict['all_motions'] = "True"
+        else:
+            pca_traj_dict['all_motions'] = "False"
 
-    pca_traj_dict['mirrored_motion'] = "False"
-    for mFile in motion_files:
-        if 'mirrored' in mFile:
-            pca_traj_dict['mirrored_motion'] = "True"
-            break
+        pca_traj_dict['mirrored_motion'] = "False"
+        for mFile in motion_files:
+            if 'mirrored' in mFile:
+                pca_traj_dict['mirrored_motion'] = "True"
+                break
 
-    if normal_basis:
-        pca_traj_dict['normal_basis'] = "True"
-    else:
-        pca_traj_dict['normal_basis'] = "False"
+        if normal_basis:
+            pca_traj_dict['normal_basis'] = "True"
+        else:
+            pca_traj_dict['normal_basis'] = "False"
 
-    pca_traj_dict['singular_val_scaling_const'] = singular_val_scale
+        pca_traj_dict['singular_val_scaling_const'] = singular_val_scale
 
-    key_list = ['frame_duration', 'root_position', 'root_rotation']
+        key_list = ['frame_duration', 'root_position', 'root_rotation']
 
-    info_retained, num_dims_retained, pca_traj_dict = \
-        pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list, joint_idx=joint_idx,
-                    n_dims=n_dims, keep_info=keep_info, pca=pca, reproj=reproj, basis=basis,
-                    u_matrix=u_matrix, sigma_matrix=sigma_matrix, v_matrix=v_matrix,
-                    inverse=inverse, eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
-                    fixed_root_rot=fixed_root_rot, normalise=normalise, single_pca=single_pca,
-                    graph=graph, activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
-                    sine_freq=sine_freq, sine_period=sine_period, sine_offset=sine_offset,
-                    sine=sine, frame_dur=frame_dur, singular_val_scale=singular_val_scale,
-                    euler_dims=euler_tot_idx, quat_dims=quat_tot_idx, normal_basis=normal_basis)
+        info_retained, num_dims_retained, pca_traj_dict = \
+            pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list, joint_idx=joint_idx,
+                        n_dims=dim, keep_info=keep_info, pca=pca, reproj=reproj, basis=basis,
+                        u_matrix=u_matrix, sigma_matrix=sigma_matrix, v_matrix=v_matrix,
+                        inverse=inverse, eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
+                        fixed_root_rot=fixed_root_rot, normalise=normalise, single_pca=single_pca,
+                        graph=graph, activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
+                        sine_freq=sine_freq, sine_period=sine_period, sine_offset=sine_offset,
+                        sine=sine, frame_dur=frame_dur, singular_val_scale=singular_val_scale,
+                        euler_dims=euler_tot_idx, quat_dims=quat_tot_idx, normal_basis=normal_basis)
 
-    print("No. of dimensions: ", num_dims_retained)
-    print("Keept info: ", info_retained)
-    print("Euler Dimension: ", euler_tot_idx)
-    print("Quaternion Dimensions: ", quat_tot_idx)
+        print("No. of dimensions: ", num_dims_retained)
+        print("Keept info: ", info_retained)
+        print("Euler Dimension: ", euler_tot_idx)
+        print("Quaternion Dimensions: ", quat_tot_idx)
 
-    # Create output path and file
-    output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
-    output_file = '{}_'.format(character)
-    if all_motions:
-        output_file += 'all-motions_'
-        if pca_traj_dict['mirrored_motion'] == "True":
-            output_file += 'mirrored'
-    else:
-        for m_file in motion_files:
-            motion_name = m_file.split("/")[-1]
-            motion_name = motion_name.split(".")[0]
-            motion_name = motion_name.split("{}3d_".format(character))[-1]
-            motion_name = motion_name.split("mirrored_")[-1]
-            if motion_name not in output_file and 'motion' not in motion_name:
-                output_file += motion_name + '-'
-        # Removing the last '-'
-        output_file = output_file[:-1]
-    domain = "euler_" if eulerangle else "quat_"
-    output_file = output_file_path + domain + output_file + "_" + str(info_retained) + "_" + \
-        str(num_dims_retained) + ".txt"
+        # Create output path and file
+        if single_pca:
+            if len(n_dims) > 1:
+                output_file = "Output/single_coactivations/pca_single_traj_{}.txt".format(dim)
+            else:
+                output_file = None
+        else:
+            output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
+            output_file = '{}_'.format(character)
+            if all_motions:
+                output_file += 'all-motions_'
+                if pca_traj_dict['mirrored_motion'] == "True":
+                    output_file += 'mirrored'
+            else:
+                for m_file in motion_files:
+                    motion_name = m_file.split("/")[-1]
+                    motion_name = motion_name.split(".")[0]
+                    motion_name = motion_name.split("{}3d_".format(character))[-1]
+                    motion_name = motion_name.split("mirrored_")[-1]
+                    if motion_name not in output_file and 'motion' not in motion_name:
+                        output_file += motion_name + '-'
+                # Removing the last '-'
+                output_file = output_file[:-1]
+            domain = "euler_" if eulerangle else "quat_"
+            output_file = output_file_path + domain + output_file + "_" + str(info_retained) + \
+                "_" + str(num_dims_retained) + ".txt"
 
-    # Save pca trajectories and basis dictionary on to the created output file
-    with open(output_file, 'w') as fp:
-        json.dump(pca_traj_dict, fp, indent=4)
+        # Save pca trajectories and basis dictionary on to the created output file
+        if output_file is not None:
+            with open(output_file, 'w') as fp:
+                json.dump(pca_traj_dict, fp, indent=4)
 
     with open('Output/pca_traj.txt', 'w') as fp:
         json.dump(pca_traj_dict, fp, indent=4)
