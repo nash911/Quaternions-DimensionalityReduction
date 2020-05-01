@@ -63,6 +63,20 @@ class TF_PCA:
                 session.run([u, singular_vals, norm_singular_vals, sigma, norm_sigma, v, X_mean],
                             feed_dict={self.X: self.data})
 
+    # @property
+    def get_singular_vals(self):
+        if self.norm_singular_vals is not None:
+            return self.norm_singular_vals
+        else:
+            return self.singular_vals
+
+    # @property
+    def get_sigma(self):
+        if self.norm_sigma is not None:
+            return self.norm_sigma
+        else:
+            return self.sigma
+
     def calc_info_and_dims(self, n_dims=None, keep_info=None, single_pca=False):
         total_dims = self.data.shape[1]
 
@@ -72,20 +86,27 @@ class TF_PCA:
         # Create the aggregated ladder of kept information per dimension
         ladder = np.cumsum(normalised_singular_values)
 
-        if keep_info:
+        if keep_info and type(n_dims) is int:
             # Get the first index which is above the given information threshold
             index = next(idx for idx, value in enumerate(ladder) if value >= keep_info) + 1
             n_dims = index
         else:
-            if single_pca:
-                if n_dims < 0:
-                    keep_info = normalised_singular_values[total_dims+n_dims]
+            if type(n_dims) is int:
+                if single_pca:
+                    if n_dims < 0:
+                        keep_info = normalised_singular_values[total_dims+n_dims]
+                    else:
+                        keep_info = normalised_singular_values[n_dims-1]
                 else:
-                    keep_info = normalised_singular_values[n_dims-1]
+                    if n_dims < 0:
+                        ladder = np.cumsum(np.flip(normalised_singular_values))
+                    keep_info = ladder[abs(n_dims)-1]
+            elif type(n_dims) is list:
+                keep_info = np.sum(normalised_singular_values[n_dims])
             else:
-                if n_dims < 0:
-                    ladder = np.cumsum(np.flip(normalised_singular_values))
-                keep_info = ladder[abs(n_dims)-1]
+                print("Error: 'n_dims' with incorrect dtype:", type(n_dims))
+                print("It should either be of type 'int' or 'list'.")
+                sys.exit()
 
         return n_dims, keep_info
 
@@ -93,22 +114,36 @@ class TF_PCA:
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info)
         total_dims = self.data.shape[1]
 
-        if n_dims >= 0:
-            start_idx = 0
-        else:
-            start_idx = total_dims + n_dims
+        if type(n_dims) is int:
+            if n_dims >= 0:
+                start_idx = 0
+            else:
+                start_idx = total_dims + n_dims
 
-        with self.graph.as_default():
-            # Cut out the relevant part from ∑ and U
-            sigma = tf.slice(self.sigma, [start_idx, start_idx],
-                             [abs(n_dims), abs(n_dims)])
-            u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
+            with self.graph.as_default():
+                # Cut out the relevant part from ∑ and U
+                sigma = tf.slice(self.sigma, [start_idx, start_idx],
+                                 [abs(n_dims), abs(n_dims)])
+                u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
 
-            # PCA
-            pca = tf.matmul(u, sigma)
+                # PCA
+                pca = tf.matmul(u, sigma)
 
-        with tf.Session(graph=self.graph) as session:
-            return keep_info, n_dims, session.run(pca)
+            with tf.Session(graph=self.graph) as session:
+                return keep_info, n_dims, session.run(pca)
+        elif type(n_dims) is list:
+            with self.graph.as_default():
+                num_k = len(n_dims)
+                # Gather from ∑ and U matrices, based in indices specified in n_dims list
+                sigma = tf.eye(num_k, num_k, dtype=self.dtype) * tf.gather(self.singular_vals,
+                                                                           n_dims, axis=0)
+                u = tf.transpose(tf.gather(tf.transpose(self.u), n_dims, axis=0))
+
+                # PCA
+                pca = tf.matmul(u, sigma)
+
+            with tf.Session(graph=self.graph) as session:
+                return keep_info, len(n_dims), session.run(pca)
 
     def reproject(self, n_dims=None, keep_info=None, sine=False, single_pca=False,
                   frame_dur=0.03, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
@@ -118,7 +153,7 @@ class TF_PCA:
 
         with self.graph.as_default():
             if single_pca:
-                if n_dims >= 0:
+                if n_dims > 0:
                     start_idx = n_dims - 1
                 else:
                     start_idx = total_dims + n_dims
@@ -133,19 +168,34 @@ class TF_PCA:
                     u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], 1])
                 v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], 1])
             else:
-                if n_dims >= 0:
-                    start_idx = 0
-                else:
-                    start_idx = total_dims + n_dims
-                # Cut out the relevant part from ∑, U and V
-                sigma = tf.slice((self.sigma if singular_val_scale is None else self.norm_sigma),
-                                 [start_idx, start_idx], [abs(n_dims), abs(n_dims)])
-                if sine:
-                    u = self.sine_fn(frame_dur=frame_dur, amp=sine_amp, freq=sine_freq,
-                                     period=sine_period, offset=sine_offset)
-                else:
-                    u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
-                v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
+                if type(n_dims) is int:
+                    if n_dims >= 0:
+                        start_idx = 0
+                    else:
+                        start_idx = total_dims + n_dims
+                    # Cut out the relevant part from ∑, U and V
+                    sigma = tf.slice((self.sigma if singular_val_scale is None else
+                                      self.norm_sigma), [start_idx, start_idx],
+                                     [abs(n_dims), abs(n_dims)])
+                    if sine:
+                        u = self.sine_fn(frame_dur=frame_dur, amp=sine_amp, freq=sine_freq,
+                                         period=sine_period, offset=sine_offset)
+                    else:
+                        u = tf.slice(self.u, [0, start_idx], [self.data.shape[0], abs(n_dims)])
+                    v = tf.slice(self.v, [0, start_idx], [self.data.shape[1], abs(n_dims)])
+                elif type(n_dims) is list:
+                    num_k = len(n_dims)
+
+                    # Gather from ∑, U and V matrices, based in indices specified in n_dims list
+                    sigma = tf.eye(num_k, num_k, dtype=self.dtype) * \
+                        tf.gather(self.get_singular_vals(), n_dims, axis=0)
+                    if sine:
+                        u = self.sine_fn(frame_dur=frame_dur, amp=sine_amp, freq=sine_freq,
+                                         period=sine_period, offset=sine_offset)
+                    else:
+                        u = tf.transpose(tf.gather(tf.transpose(self.u), n_dims, axis=0))
+                    v = tf.transpose(tf.gather(tf.transpose(self.v), n_dims, axis=0))
+                    n_dims = len(n_dims)
 
             # Reproject on to linear subspace spanned by Principle Components
             if normal_basis:
@@ -160,18 +210,27 @@ class TF_PCA:
               normal_basis=False, singular_val_scale=None):
         n_dims, keep_info = self.calc_info_and_dims(n_dims, keep_info, single_pca)
 
-        if n_dims >= 0:
-            if normal_basis:
-                b = self.v[:, 0:n_dims].T
+        if type(n_dims) is int:
+            if n_dims >= 0:
+                if normal_basis:
+                    b = self.v[:, 0:n_dims].T
+                else:
+                    b = np.matmul((self.sigma if singular_val_scale is None else self.norm_sigma)
+                                  [0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
             else:
-                b = np.matmul((self.sigma if singular_val_scale is None else self.norm_sigma)
-                              [0:n_dims, 0:n_dims], self.v[:, 0:n_dims].T)
-        else:
+                if normal_basis:
+                    b = self.v[:, n_dims:].T
+                else:
+                    b = np.matmul((self.sigma if singular_val_scale is None else self.norm_sigma)
+                                  [n_dims:, n_dims:], self.v[:, n_dims:].T)
+        elif type(n_dims) is list:
             if normal_basis:
-                b = self.v[:, n_dims:].T
+                b = self.v[:, n_dims].T
             else:
-                b = np.matmul((self.sigma if singular_val_scale is None else self.norm_sigma)
-                              [n_dims:, n_dims:], self.v[:, n_dims:].T)
+                num_k = len(n_dims)
+                b = np.matmul((np.eye(num_k, dtype=np.float32) * self.get_singular_vals()[n_dims]),
+                              self.v[:, n_dims].T)
+            n_dims = len(n_dims)
 
         return keep_info, n_dims, b
 
@@ -398,10 +457,11 @@ def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06, normal_basis=False):
     num_vecs = c_vecs.shape[0]
     vec_list = [c_vecs[i, :] for i in range(num_vecs)]
     orthogonal = True
+    num_k = len(n_dims) if type(n_dims) is list else n_dims
 
     mat_mul = np.matmul(c_vecs, c_vecs.T)
     if normal_basis:
-        if not np.allclose(mat_mul, np.eye(abs(n_dims)), rtol=1e-05, atol=1e-05):
+        if not np.allclose(mat_mul, np.eye(abs(num_k)), rtol=1e-05, atol=1e-05):
             return False
     else:
         for i in range(num_vecs):
@@ -436,6 +496,9 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
                 sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
                 sine_offset=[0], euler_dims=28, quat_dims=36, singular_val_scale=None,
                 normal_basis=False):
+    if type(n_dims) is list:
+        n_dims = (np.array(n_dims)-1).tolist()
+
     if pca:
         # Project the trajectories on to a reduced lower-dimensional space: U ∑
         info_retained, num_dims_retained, reduced = \
@@ -508,26 +571,41 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
         pca_traj_dict['Basis'] = basis_v.tolist()
 
     if u_matrix:
-        U = tf_pca.u[:, 0:n_dims]
+        if type(n_dims) is int:
+            U = tf_pca.u[:, 0:n_dims]
+        elif type(n_dims) is list:
+            U = tf_pca.u[:, n_dims]
         pca_traj_dict['U'] = U.tolist()
 
     if sigma_matrix:
-        Sigma = (tf_pca.norm_sigma if singular_val_scale is not None else
-                 tf_pca.sigma)[:n_dims, :n_dims]
-        Singular_values = (tf_pca.norm_singular_vals if singular_val_scale is not None else
-                           tf_pca.singular_vals)[:n_dims]
+        if type(n_dims) is int:
+            Singular_values = (tf_pca.norm_singular_vals if singular_val_scale is not None else
+                               tf_pca.singular_vals)[:n_dims]
+            Sigma = (tf_pca.norm_sigma if singular_val_scale is not None else
+                     tf_pca.sigma)[:n_dims, :n_dims]
+        elif type(n_dims) is list:
+            num_k = len(n_dims)
+            Singular_values = tf_pca.get_singular_vals()[n_dims]
+            Sigma = np.eye(num_k, dtype=np.float32) * Singular_values
+
         pca_traj_dict['Sigma'] = Sigma.tolist()
         pca_traj_dict['Singular_Values'] = Singular_values.tolist()
         print("\nSingular_values:", Singular_values, "\n")
         print("\nNorm Sing_vals :", Singular_values/np.sum(Singular_values), "\n")
 
     if v_matrix:
-        V = tf_pca.v[:, 0:n_dims]
+        if type(n_dims) is int:
+            V = tf_pca.v[:, 0:n_dims]
+        elif type(n_dims) is list:
+            V = tf_pca.v[:, n_dims]
         pca_traj_dict['V'] = V.tolist()
 
     if inverse:
         # Get pseudo-inverse of matrix V: (V^-1)^T
-        v_pinv = pinv(tf_pca.v[:, 0:n_dims]).T
+        if type(n_dims) is int:
+            v_pinv = pinv(tf_pca.v[:, 0:n_dims]).T
+        elif type(n_dims) is list:
+            v_pinv = pinv(tf_pca.v[:, n_dims]).T
         pca_traj_dict['V_Inv'] = v_pinv.tolist()
 
         # Check if the pseudo-inverse is consistant
@@ -773,7 +851,7 @@ def main(argv):
     print("n_dims: ", n_dims)
 
     if single_pca and len(n_dims) > 1:
-        # Empty content of folder 'x'
+        # Empty content of 'single_coactivations' folder
         folder = 'Output/single_coactivations'
         for filename in os.listdir(folder):
             file_path = os.path.join(folder, filename)
@@ -782,9 +860,10 @@ def main(argv):
 
     if sine:
         if not single_pca:
-            sine_amp = (np.ones(n_dims) * sine_amp[0]).tolist()
-            sine_freq = (np.ones(n_dims) * sine_freq[0]).tolist()
-            sine_offset = (np.ones(n_dims) * sine_offset[0]).tolist()
+            num_k = len(n_dims[0]) if type(n_dims[0]) is list else n_dims[0]
+            sine_amp = (np.ones(num_k) * sine_amp[0]).tolist()
+            sine_freq = (np.ones(num_k) * sine_freq[0]).tolist()
+            sine_offset = (np.ones(num_k) * sine_offset[0]).tolist()
 
     # Random shuffle data-points (Won't make sense to shuffle when root NOT fixed)
     # np.random.shuffle(motion_data)
@@ -894,7 +973,7 @@ def main(argv):
                 output_file = output_file[:-1]
             domain = "euler_" if eulerangle else "quat_"
             output_file = output_file_path + domain + output_file + "_" + str(info_retained) + \
-                "_" + str(num_dims_retained) + ".txt"
+                "_" + str(num_dims_retained) + "d.txt"
 
         # Save pca trajectories and basis dictionary on to the created output file
         if output_file is not None:
