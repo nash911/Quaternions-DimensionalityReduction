@@ -930,6 +930,8 @@ def main(argv):
 
         pca_traj_dict['singular_val_scaling_const'] = singular_val_scale
 
+        pca_traj_dict['coactivations'] = n_dims if type(dim) is list else str(dim) + 'D'
+
         key_list = ['frame_duration', 'root_position', 'root_rotation']
 
         info_retained, num_dims_retained, pca_traj_dict = \
@@ -966,6 +968,7 @@ def main(argv):
                     motion_name = m_file.split("/")[-1]
                     motion_name = motion_name.split(".")[0]
                     motion_name = motion_name.split("{}3d_".format(character))[-1]
+                    motion_name = motion_name.split("{}_".format(character))[-1]
                     motion_name = motion_name.split("mirrored_")[-1]
                     if motion_name not in output_file and 'motion' not in motion_name:
                         output_file += motion_name + '-'
