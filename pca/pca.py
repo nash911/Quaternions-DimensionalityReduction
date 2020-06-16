@@ -5,14 +5,12 @@ import tensorflow as tf
 import math
 from collections import OrderedDict
 import sys
+import re
 import getopt
 import json
 import os
 import glob
-# from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
-# import seaborn as sns
-# from scipy.stats import ortho_group
 
 
 class TF_PCA:
@@ -524,7 +522,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
         m = reproj_traj.shape[0]
         if m != unchanged_traj.shape[0]:
             if fixed_root_pos and fixed_root_rot:
-                fixed_dur_root = np.array([frame_dur] + [1, 1, 1] + [1, 0, 0, 0])
+                fixed_dur_root = np.array([frame_dur] + [1., 1., 1.] + [1, 0, 0, 0])
                 unchanged_traj = np.ones((m, 8), dtype=reproj_traj.dtype) * fixed_dur_root
             else:
                 print("Error: Number of frames in the reprojected trajectories: %d != %d"
@@ -702,6 +700,7 @@ def main(argv):
     frame_dur = None
     normal_basis = False
     character = None
+    version = None
     keep_info = None
     n_dims = None
     singular_val_scale = None
@@ -712,7 +711,7 @@ def main(argv):
     duration_warning = False
     sine_period_warning = False
 
-    characters = ['humanoid', 'biped', 'salamander', 'cheetah']
+    characters = ['humanoid', 'biped', 'salamander', 'cheetah', 'snake']
 
     try:
         opts, args = getopt.getopt(argv, "haprbuzviaenfsgSNm:k:d:t:A:F:P:O:D:c:",
@@ -807,6 +806,14 @@ def main(argv):
             if ch in m_file:
                 character = ch
                 continue
+
+        if version is None:
+            version = re.search('V(.*)_', m_file)
+            try:
+                version = str(version.group(1))
+            except AttributeError:
+                version = None
+
         try:
             with open(m_file) as mf:
                 motion_dict = json.load(mf)
@@ -957,24 +964,29 @@ def main(argv):
             else:
                 output_file = None
         else:
-            output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca_"
-            output_file = '{}_'.format(character)
+            output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca"
+            output_file = '_{}'.format(character)
+            if version is not None:
+                # # Removing the last '_'
+                # output_file = output_file[:-1]
+                output_file += 'V{}'.format(version)
             if all_motions:
-                output_file += 'all-motions_'
+                output_file += '_all-motions_'
                 if pca_traj_dict['mirrored_motion'] == "True":
-                    output_file += 'mirrored'
+                    output_file += '_mirrored'
             else:
                 for m_file in motion_files:
                     motion_name = m_file.split("/")[-1]
-                    motion_name = motion_name.split(".")[0]
+                    motion_name = motion_name.split(".dat")[0]
                     motion_name = motion_name.split("{}3d_".format(character))[-1]
                     motion_name = motion_name.split("{}_".format(character))[-1]
+                    motion_name = motion_name.split("V{}_".format(version))[-1]
                     motion_name = motion_name.split("mirrored_")[-1]
                     if motion_name not in output_file and 'motion' not in motion_name:
-                        output_file += motion_name + '-'
+                        output_file += '_' + motion_name + '-'
                 # Removing the last '-'
                 output_file = output_file[:-1]
-            domain = "euler_" if eulerangle else "quat_"
+            domain = "_euler" if eulerangle else "_quat"
             output_file = output_file_path + domain + output_file + "_" + str(info_retained) + \
                 "_" + str(num_dims_retained) + "d.txt"
 
