@@ -493,7 +493,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
                 normalise=False, single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
                 sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
                 sine_offset=[0], euler_dims=28, quat_dims=36, singular_val_scale=None,
-                normal_basis=False):
+                normal_basis=False, c_hat=False):
     if type(n_dims) is list:
         n_dims = (np.array(n_dims)-1).tolist()
 
@@ -522,7 +522,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
         m = reproj_traj.shape[0]
         if m != unchanged_traj.shape[0]:
             if fixed_root_pos and fixed_root_rot:
-                fixed_dur_root = np.array([frame_dur] + [1., 1., 1.] + [1, 0, 0, 0])
+                fixed_dur_root = np.array([frame_dur] + [1.3, 1.3, 1.3] + [1, 0, 0, 0])
                 unchanged_traj = np.ones((m, 8), dtype=reproj_traj.dtype) * fixed_dur_root
             else:
                 print("Error: Number of frames in the reprojected trajectories: %d != %d"
@@ -632,6 +632,11 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
         # np.testing.assert_array_almost_equal(
         #     np.matmul((tf_pca.data - tf_pca.X_mean), basis_mat_pinv), RHS, decimal=4)
 
+    if c_hat:
+        C = np.array(pca_traj_dict['Basis'])
+        C_hat = np.matmul(np.linalg.inv(np.matmul(C, np.transpose(C))), C)
+        pca_traj_dict['C_hat'] = C_hat.tolist()
+
     if normalise and eulerangle:
         X_mean = tf_pca.X_mean
         pca_traj_dict['Reference_Mean'] = X_mean.tolist()
@@ -656,6 +661,7 @@ def usage():
           "              [-F | --sine_freq] <list of sine-excitation frequencies> \n"
           "              [-g | --graph] \n"
           "              [-h | --help] \n"
+          "              [-H | --c_hat] \n"
           "              [-i | --inv] \n"
           "              [-k | --keep] <% of info. to be retained> \n"
           "              [-m | --mfile] <input motion file(s) or directory> \n"
@@ -684,6 +690,7 @@ def main(argv):
     sigma_matrix = False
     v_matrix = False
     inverse = False
+    c_hat = False
     activ_stat = False
     eulerangle = False
     normalise = False
@@ -714,11 +721,11 @@ def main(argv):
     characters = ['humanoid', 'biped', 'salamander', 'cheetah', 'snake']
 
     try:
-        opts, args = getopt.getopt(argv, "haprbuzviaenfsgSNm:k:d:t:A:F:P:O:D:c:",
+        opts, args = getopt.getopt(argv, "haprbuzviHenfsgSNm:k:d:t:A:F:P:O:D:c:",
                                    ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
-                                    "V", "inv", "eulerangle", "normalise", "fixed", "single",
-                                    "graph", "sine", "normal_basis", "mfile=", "keep=", "dims=",
-                                    "tol=", "sine_amp=", "sine_period=", "sine_freq=",
+                                    "V", "inv", "c_hat", "eulerangle", "normalise", "fixed",
+                                    "single", "graph", "sine", "normal_basis", "mfile=", "keep=",
+                                    "dims=", "tol=", "sine_amp=", "sine_period=", "sine_freq=",
                                     "sine_offset=", "frame_duration=", "scaling_constant="])
     except getopt.GetoptError:
         usage()
@@ -744,6 +751,8 @@ def main(argv):
             v_matrix = True
         elif opt in ("-i", "--inv"):
             inverse = True
+        elif opt in ("-H", "--c_hat"):
+            c_hat = True
         elif opt in ("-e", "--eulerangle"):
             eulerangle = True
         elif opt in ("-n", "--normalise"):
@@ -945,9 +954,10 @@ def main(argv):
             pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list, joint_idx=joint_idx,
                         n_dims=dim, keep_info=keep_info, pca=pca, reproj=reproj, basis=basis,
                         u_matrix=u_matrix, sigma_matrix=sigma_matrix, v_matrix=v_matrix,
-                        inverse=inverse, eulerangle=eulerangle, fixed_root_pos=fixed_root_pos,
-                        fixed_root_rot=fixed_root_rot, normalise=normalise, single_pca=single_pca,
-                        graph=graph, activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
+                        inverse=inverse, c_hat=c_hat, eulerangle=eulerangle,
+                        fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
+                        normalise=normalise, single_pca=single_pca, graph=graph,
+                        activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
                         sine_freq=sine_freq, sine_period=sine_period, sine_offset=sine_offset,
                         sine=sine, frame_dur=frame_dur, singular_val_scale=singular_val_scale,
                         euler_dims=euler_tot_idx, quat_dims=quat_tot_idx, normal_basis=normal_basis)
