@@ -11,6 +11,7 @@ import json
 import os
 import glob
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 
 class TF_PCA:
@@ -264,13 +265,20 @@ class TF_PCA:
 def plot(data):
     # 3-D plot
     fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+    if data.shape[-1] >= 3:
+        ax = fig.add_subplot(111, projection='3d')
 
-    ax.scatter(data[:, 0], data[:, 1], data[:, 2], c='r', marker='o')
+        ax.scatter(data[:, 0], data[:, 1], data[:, 2], c='r', marker='o')
 
-    ax.set_xlabel('PC-1')
-    ax.set_ylabel('PC-2')
-    ax.set_zlabel('PC-3')
+        ax.set_xlabel('PC-1')
+        ax.set_ylabel('PC-2')
+        ax.set_zlabel('PC-3')
+    else:
+        ax = fig.add_subplot(1, 1, 1)
+        ax.scatter(data[:, 0], data[:, 1], c='r', marker='o')
+
+        ax.set_xlabel('PC-1')
+        ax.set_ylabel('PC-2')
 
     plt.show()
 
@@ -451,6 +459,15 @@ def convert_euler_to_quat(euler_dict, key_list):
     return quat_dict
 
 
+def create_velocity_matrix(pos_mat, episode_len=30, dt=1.0/30.0):
+    pos_mat_3d = pos_mat.reshape(-1, episode_len, pos_mat.shape[-1])
+    slice_shape = list(pos_mat_3d.shape)
+    slice_shape[1] = 1
+    pos_mat_t1 = np.append(np.delete(pos_mat_3d, 0, axis=1), np.zeros((tuple(slice_shape))), axis=1)
+    vel_mat = np.delete(pos_mat_t1 - pos_mat_3d, -1, axis=1) / dt
+    return vel_mat.reshape(-1, pos_mat.shape[-1])
+
+
 def check_orthogonality(c_vecs, n_dims, orth_tol=1e-06, normal_basis=False):
     num_vecs = c_vecs.shape[0]
     vec_list = [c_vecs[i, :] for i in range(num_vecs)]
@@ -489,11 +506,11 @@ def convert_to_json(pose_file):
 
 def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_idx, inverse=False,
                 keep_info=0.9, pca=True, reproj=True, basis=True, u_matrix=False, v_matrix=False,
-                sigma_matrix=False, eulerangle=False, fixed_root_pos=False, fixed_root_rot=False,
-                normalise=False, single_pca=False, graph=False, activ_stat=False, orth_tol=1e-06,
-                sine=False, frame_dur=0.0333, sine_amp=[1.0], sine_freq=[1.0], sine_period=1.0,
-                sine_offset=[0], euler_dims=28, quat_dims=36, singular_val_scale=None,
-                normal_basis=False, c_hat=False):
+                sigma_matrix=False, eulerangle=False, tf_pca_vel=None, fixed_root_pos=False,
+                fixed_root_rot=False, normalise=False, single_pca=False, graph=False,
+                activ_stat=False, orth_tol=1e-06, sine=False, frame_dur=0.0333, sine_amp=[1.0],
+                sine_freq=[1.0], sine_period=1.0, sine_offset=[0], euler_dims=28, quat_dims=36,
+                singular_val_scale=None, normal_basis=False, c_hat=False):
     if type(n_dims) is list:
         n_dims = (np.array(n_dims)-1).tolist()
 
@@ -555,8 +572,7 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
             tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca,
                          normal_basis=normal_basis, singular_val_scale=singular_val_scale)
 
-        if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol,
-                                   normal_basis=normal_basis):
+        if not check_orthogonality(basis_v, n_dims, orth_tol=orth_tol, normal_basis=normal_basis):
             if os.path.exists('Output/pca_traj.txt'):
                 os.remove('Output/pca_traj.txt')
 
@@ -568,12 +584,38 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
 
         pca_traj_dict['Basis'] = basis_v.tolist()
 
+    if tf_pca_vel is not None:
+        # Get full-rank normalized basis vectors of the linear sub-space: V^T
+        _, _, basis_vel = tf_pca_vel.basis(keep_info=keep_info, n_dims=n_dims, normal_basis=True,
+                                           single_pca=single_pca)
+
+        if not check_orthogonality(basis_vel, n_dims, orth_tol=orth_tol, normal_basis=True):
+            if os.path.exists('Output/pca_traj.txt'):
+                os.remove('Output/pca_traj.txt')
+
+            print("Error: Basis_Vel Vectors not Orthonormal!")
+            sys.exit()
+
+        pca_traj_dict['Basis_Vel'] = basis_vel.tolist()
+
+        if graph:
+            # Project the trajectories on to a reduced lower-dimensional space: U ∑
+            _, _, reduced_vel = tf_pca_vel.reduce(keep_info=keep_info, n_dims=n_dims)
+            plot(reduced_vel)
+
     if u_matrix:
         if type(n_dims) is int:
             U = tf_pca.u[:, 0:n_dims]
         elif type(n_dims) is list:
             U = tf_pca.u[:, n_dims]
         pca_traj_dict['U'] = U.tolist()
+
+        if tf_pca_vel is not None:
+            if type(n_dims) is int:
+                U_vel = tf_pca_vel.u[:, 0:n_dims]
+            elif type(n_dims) is list:
+                U_vel = tf_pca_vel.u[:, n_dims]
+            pca_traj_dict['U_Vel'] = U_vel.tolist()
 
     if sigma_matrix:
         if type(n_dims) is int:
@@ -674,9 +716,10 @@ def usage():
           "              [-s | --single] \n"
           "              [-S | --sine] \n"
           "              [-t | --tol] <orthogonal tolerance> \n"
-          "              [-u | --U] \n"
-          "              [-v | --V] \n"
-          "              [-z | --Sigma] \n"
+          "              [-U | --U] \n"
+          "              [-v | --velocity_basis] \n"
+          "              [-V | --V] \n"
+          "              [-Z | --Sigma] \n"
           )
 
 
@@ -711,6 +754,7 @@ def main(argv):
     keep_info = None
     n_dims = None
     singular_val_scale = None
+    vel_basis = False
 
     info_retained = None
     num_dims_retained = None
@@ -721,12 +765,13 @@ def main(argv):
     characters = ['humanoid', 'biped', 'salamander', 'cheetah', 'snake']
 
     try:
-        opts, args = getopt.getopt(argv, "haprbuzviHenfsgSNm:k:d:t:A:F:P:O:D:c:",
+        opts, args = getopt.getopt(argv, "haprbUZViHenfsgSNvm:k:d:t:A:F:P:O:D:c:",
                                    ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
                                     "V", "inv", "c_hat", "eulerangle", "normalise", "fixed",
-                                    "single", "graph", "sine", "normal_basis", "mfile=", "keep=",
-                                    "dims=", "tol=", "sine_amp=", "sine_period=", "sine_freq=",
-                                    "sine_offset=", "frame_duration=", "scaling_constant="])
+                                    "single", "graph", "sine", "normal_basis", "velocity_basis",
+                                    "mfile=", "keep=", "dims=", "tol=", "sine_amp=", "sine_period=",
+                                    "sine_freq=", "sine_offset=", "frame_duration=",
+                                    "scaling_constant="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -743,11 +788,11 @@ def main(argv):
             reproj = True
         elif opt in ("-b", "--basis"):
             basis = True
-        elif opt in ("-u", "--U"):
+        elif opt in ("-U", "--U"):
             u_matrix = True
-        elif opt in ("-z", "--Sigma"):
+        elif opt in ("-Z", "--Sigma"):
             sigma_matrix = True
-        elif opt in ("-v", "--V"):
+        elif opt in ("-V", "--V"):
             v_matrix = True
         elif opt in ("-i", "--inv"):
             inverse = True
@@ -794,6 +839,8 @@ def main(argv):
             normal_basis = True
         elif opt in ("-c", "--scaling_constant"):
             singular_val_scale = float(arg)
+        elif opt in ("-v", "--velocity_basis"):
+            vel_basis = True
 
     if normal_basis and singular_val_scale is not None:
         print("Error: Flags [-N | --normal_basis] and [-c | --scaling_constant] are both set.\n"
@@ -917,6 +964,18 @@ def main(argv):
     # Compute U, ∑ and V
     tf_pca.fit(normalise, singular_val_scale)
 
+    if vel_basis:
+        dt = quat_trajectory_dict['frame_duration'][0]
+        episode_len = 30
+        ref_vel_matrix = create_velocity_matrix(ref_traj_matrix, episode_len=episode_len, dt=dt)
+        # Create a TF PCA object for Velocity data
+        tf_pca_vel = TF_PCA(ref_vel_matrix)
+
+        # Compute U, ∑ and V
+        tf_pca_vel.fit(normalise=True)
+    else:
+        tf_pca_vel = None
+
     for dim in n_dims:
         # Create a new reduced-motion-dictionary
         pca_traj_dict = OrderedDict()
@@ -954,7 +1013,7 @@ def main(argv):
             pca_extract(tf_pca, pca_traj_dict, norm_trajectory_dict, key_list, joint_idx=joint_idx,
                         n_dims=dim, keep_info=keep_info, pca=pca, reproj=reproj, basis=basis,
                         u_matrix=u_matrix, sigma_matrix=sigma_matrix, v_matrix=v_matrix,
-                        inverse=inverse, c_hat=c_hat, eulerangle=eulerangle,
+                        inverse=inverse, c_hat=c_hat, eulerangle=eulerangle, tf_pca_vel=tf_pca_vel,
                         fixed_root_pos=fixed_root_pos, fixed_root_rot=fixed_root_rot,
                         normalise=normalise, single_pca=single_pca, graph=graph,
                         activ_stat=activ_stat, orth_tol=orth_tol, sine_amp=sine_amp,
@@ -1015,10 +1074,10 @@ def main(argv):
         print("WARNING: Data Not Normalised! Use flag: [-n | --normalise]")
 
     if not u_matrix:
-        print("WARNING: U Not Saved! Use flag: [-u | --U]")
+        print("WARNING: U Not Saved! Use flag: [-U | --U]")
 
     if not sigma_matrix:
-        print("WARNING: Sigma Not Saved! Use flag: [-z | --Sigma]")
+        print("WARNING: Sigma Not Saved! Use flag: [-Z | --Sigma]")
 
     if not inverse:
         print("WARNING: Inverse Not Saved! Use flag: [-i | --inv]")
