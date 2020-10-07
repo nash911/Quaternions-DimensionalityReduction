@@ -586,10 +586,11 @@ def pca_extract(tf_pca, pca_traj_dict, trajectory_dict, key_list, n_dims, joint_
 
     if tf_pca_vel is not None:
         # Get full-rank normalized basis vectors of the linear sub-space: V^T
-        _, _, basis_vel = tf_pca_vel.basis(keep_info=keep_info, n_dims=n_dims, normal_basis=True,
-                                           single_pca=single_pca)
+        _, _, basis_vel = \
+            tf_pca.basis(keep_info=keep_info, n_dims=n_dims, single_pca=single_pca,
+                         normal_basis=normal_basis, singular_val_scale=singular_val_scale)
 
-        if not check_orthogonality(basis_vel, n_dims, orth_tol=orth_tol, normal_basis=True):
+        if not check_orthogonality(basis_vel, n_dims, orth_tol=orth_tol, normal_basis=normal_basis):
             if os.path.exists('Output/pca_traj.txt'):
                 os.remove('Output/pca_traj.txt')
 
@@ -709,6 +710,7 @@ def usage():
           "              [-m | --mfile] <input motion file(s) or directory> \n"
           "              [-n | --normalise] \n"
           "              [-N | --normal_basis] \n"
+          "              [-o | --out_path] <output file path> \n"
           "              [-O | --sine_offset] <list of sine-excitation offsets> \n"
           "              [-p | --pca] \n"
           "              [-P | --sine_period] <sine-excitation period (in seconds)> \n"
@@ -755,6 +757,7 @@ def main(argv):
     n_dims = None
     singular_val_scale = None
     vel_basis = False
+    output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca"
 
     info_retained = None
     num_dims_retained = None
@@ -765,12 +768,12 @@ def main(argv):
     characters = ['humanoid', 'biped', 'salamander', 'cheetah', 'snake']
 
     try:
-        opts, args = getopt.getopt(argv, "haprbUZViHenfsgSNvm:k:d:t:A:F:P:O:D:c:",
+        opts, args = getopt.getopt(argv, "haprbUZViHenfsgSNvm:k:d:t:A:F:P:O:D:o:c:",
                                    ["help", "activ_stat", "pca", "reproj", "basis", "U", "Sigma",
                                     "V", "inv", "c_hat", "eulerangle", "normalise", "fixed",
                                     "single", "graph", "sine", "normal_basis", "velocity_basis",
                                     "mfile=", "keep=", "dims=", "tol=", "sine_amp=", "sine_period=",
-                                    "sine_freq=", "sine_offset=", "frame_duration=",
+                                    "sine_freq=", "sine_offset=", "frame_duration=", "out_path"
                                     "scaling_constant="])
     except getopt.GetoptError:
         usage()
@@ -841,6 +844,8 @@ def main(argv):
             singular_val_scale = float(arg)
         elif opt in ("-v", "--velocity_basis"):
             vel_basis = True
+        elif opt in ("-o", "--out_path"):
+            output_file_path = arg
 
     if normal_basis and singular_val_scale is not None:
         print("Error: Flags [-N | --normal_basis] and [-c | --scaling_constant] are both set.\n"
@@ -854,6 +859,10 @@ def main(argv):
         all_motions = True
         motion_files = glob.glob(motion_files[0] + "{}3d_*.txt".format(character))
         motion_files.sort()
+
+    if output_file_path == 'self':
+        print("motion_files: ", '/'.join(motion_files[0].split('/')[0:-1]))
+        output_file_path = '/'.join(motion_files[0].split('/')[0:-1]) + '/' + 'pca'
 
     motion_data = list()
     motion_dict_list = list()
@@ -1033,7 +1042,6 @@ def main(argv):
             else:
                 output_file = None
         else:
-            output_file_path = "/home/nash/DeepMimic/data/reduced_motion/pca"
             output_file = '_{}'.format(character)
             if version is not None:
                 # # Removing the last '_'
